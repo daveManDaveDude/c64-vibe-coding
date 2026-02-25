@@ -58,6 +58,10 @@ Clean outputs:
 make clean
 ```
 
+## Program Preview
+
+![Creative C64 hello world](docs/hello-screenshot.png)
+
 ## Make Targets
 
 - `make build`: `src/hello.bas` -> `build/hello.prg`
