@@ -1,0 +1,5 @@
+vice_exit_code=1
+final_exit_code=0
+screenshot=artifacts/vice-exit.png
+logfile=artifacts/vice.log
+timestamp_utc=2026-02-25T21:23:45Z
