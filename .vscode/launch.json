@@ -1,0 +1,25 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Debug Active C64 File (VICE / VS64)",
+      "type": "vice",
+      "request": "launch",
+      "preLaunchTask": "C64: Build Active Source",
+      "program": "${workspaceFolder}/build/${fileBasenameNoExtension}.prg",
+      "hostname": "localhost",
+      "port": 6502,
+      "timeout": 10,
+      "args": ""
+    },
+    {
+      "name": "Attach to VICE (Active C64 File / VS64)",
+      "type": "vice",
+      "request": "attach",
+      "program": "${workspaceFolder}/build/${fileBasenameNoExtension}.prg",
+      "hostname": "localhost",
+      "port": 6502,
+      "timeout": 10
+    }
+  ]
+}

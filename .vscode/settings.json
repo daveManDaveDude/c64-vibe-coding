@@ -1,0 +1,7 @@
+{
+  "vs64.viceExecutable": "/opt/homebrew/bin/x64sc",
+  "vs64.vicePort": "6502",
+  "vs64.viceTimeout": "10",
+  "vs64.viceArgs": "-autostartprgmode 1",
+  "vs64.autoBuild": false
+}

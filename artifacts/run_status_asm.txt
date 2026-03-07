@@ -1,0 +1,5 @@
+vice_exit_code=1
+final_exit_code=0
+screenshot=artifacts/vice-asm-exit.png
+logfile=artifacts/vice-asm.log
+timestamp_utc=2026-03-07T22:19:34Z

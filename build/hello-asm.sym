@@ -1,0 +1,5 @@
+.label CHROUT=$ffd2
+.label print_loop=$1002
+.label start=$1000
+.label message=$100e
+.label done=$100d

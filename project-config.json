@@ -1,0 +1,10 @@
+{
+  "name": "hello",
+  "description": "c64-vibe-coding BASIC example",
+  "toolkit": "basic",
+  "build": "debug",
+  "sources": [
+    "src/hello.bas"
+  ],
+  "args": []
+}
