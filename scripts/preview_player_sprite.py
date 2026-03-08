@@ -54,7 +54,7 @@ def render_composite(output_path: Path, base_bytes: list[int], overlay_bytes: li
     overlay_rows = decode_multicolor(overlay_bytes)
     overlay_colors = {
         1: C64_COLORS[6],
-        2: C64_COLORS[3],
+        2: C64_COLORS[15],
         3: C64_COLORS[2],
     }
     for y, row in enumerate(overlay_rows):
