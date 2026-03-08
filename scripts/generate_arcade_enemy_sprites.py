@@ -1,0 +1,300 @@
+#!/usr/bin/env python3
+import argparse
+import struct
+import zlib
+from pathlib import Path
+
+
+PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+
+ROW_LABELS = ("flagship", "escort", "grunt")
+SOURCE_BLACK = (0, 0, 0, 255)
+SOURCE_RED = (224, 0, 0, 255)
+SOURCE_CYAN = (0, 133, 148, 255)
+SOURCE_PURPLE = (133, 0, 217, 255)
+SOURCE_BLUE = (0, 0, 217, 255)
+SOURCE_LIGHT_BLUE = (0, 91, 217, 255)
+SOURCE_YELLOW = (224, 224, 0, 255)
+
+# C64 multicolor sprite slots:
+# 00 transparent, 01 shared multicolor 0, 10 sprite-specific color, 11 shared multicolor 1.
+ROW_COLOR_CODES = (
+    {
+        SOURCE_BLACK: 0,
+        SOURCE_LIGHT_BLUE: 1,
+        SOURCE_YELLOW: 2,
+        SOURCE_RED: 3,
+    },
+    {
+        SOURCE_BLACK: 0,
+        SOURCE_BLUE: 1,
+        SOURCE_PURPLE: 2,
+        SOURCE_RED: 3,
+    },
+    {
+        SOURCE_BLACK: 0,
+        SOURCE_BLUE: 1,
+        SOURCE_CYAN: 2,
+        SOURCE_RED: 3,
+    },
+)
+
+
+def paeth_predictor(a: int, b: int, c: int) -> int:
+    prediction = a + b - c
+    pa = abs(prediction - a)
+    pb = abs(prediction - b)
+    pc = abs(prediction - c)
+    if pa <= pb and pa <= pc:
+        return a
+    if pb <= pc:
+        return b
+    return c
+
+
+def decode_png_rgba(path: Path) -> tuple[int, int, list[list[tuple[int, int, int, int]]]]:
+    payload = path.read_bytes()
+    if not payload.startswith(PNG_SIGNATURE):
+        raise ValueError(f"{path} is not a PNG file")
+
+    position = len(PNG_SIGNATURE)
+    width = height = 0
+    bit_depth = color_type = compression = filter_method = interlace = None
+    idat_chunks: list[bytes] = []
+
+    while position < len(payload):
+        chunk_length = struct.unpack(">I", payload[position : position + 4])[0]
+        position += 4
+        chunk_type = payload[position : position + 4]
+        position += 4
+        chunk_data = payload[position : position + chunk_length]
+        position += chunk_length + 4
+
+        if chunk_type == b"IHDR":
+            width, height, bit_depth, color_type, compression, filter_method, interlace = struct.unpack(
+                ">IIBBBBB", chunk_data
+            )
+        elif chunk_type == b"IDAT":
+            idat_chunks.append(chunk_data)
+        elif chunk_type == b"IEND":
+            break
+
+    if (bit_depth, color_type, compression, filter_method, interlace) != (8, 6, 0, 0, 0):
+        raise ValueError(
+            f"Unsupported PNG format in {path}: bit_depth={bit_depth}, color_type={color_type}, "
+            f"compression={compression}, filter={filter_method}, interlace={interlace}"
+        )
+
+    raw = zlib.decompress(b"".join(idat_chunks))
+    bytes_per_pixel = 4
+    stride = width * bytes_per_pixel
+    expected_size = height * (stride + 1)
+    if len(raw) != expected_size:
+        raise ValueError(f"Decoded PNG size mismatch for {path}: expected {expected_size}, got {len(raw)}")
+
+    rows: list[list[tuple[int, int, int, int]]] = []
+    previous = [0] * stride
+    offset = 0
+    for _ in range(height):
+        filter_type = raw[offset]
+        offset += 1
+        filtered = list(raw[offset : offset + stride])
+        offset += stride
+
+        recon = [0] * stride
+        for index in range(stride):
+            left = recon[index - bytes_per_pixel] if index >= bytes_per_pixel else 0
+            up = previous[index]
+            up_left = previous[index - bytes_per_pixel] if index >= bytes_per_pixel else 0
+
+            if filter_type == 0:
+                value = filtered[index]
+            elif filter_type == 1:
+                value = (filtered[index] + left) & 0xFF
+            elif filter_type == 2:
+                value = (filtered[index] + up) & 0xFF
+            elif filter_type == 3:
+                value = (filtered[index] + ((left + up) // 2)) & 0xFF
+            elif filter_type == 4:
+                value = (filtered[index] + paeth_predictor(left, up, up_left)) & 0xFF
+            else:
+                raise ValueError(f"Unsupported PNG filter type {filter_type} in {path}")
+
+            recon[index] = value
+
+        row = []
+        for index in range(0, stride, bytes_per_pixel):
+            row.append(tuple(recon[index : index + bytes_per_pixel]))
+        rows.append(row)
+        previous = recon
+
+    return width, height, rows
+
+
+def split_ranges(length: int, separators: list[int]) -> list[range]:
+    boundaries = [-1, *separators, length]
+    ranges = []
+    for start, end in zip(boundaries, boundaries[1:]):
+        if end - start <= 1:
+            continue
+        ranges.append(range(start + 1, end))
+    return ranges
+
+
+def find_separators(rows: list[list[tuple[int, int, int, int]]]) -> tuple[list[int], list[int], tuple[int, int, int, int]]:
+    height = len(rows)
+    width = len(rows[0])
+    counts: dict[tuple[int, int, int, int], int] = {}
+    for row in rows:
+        for pixel in row:
+            counts[pixel] = counts.get(pixel, 0) + 1
+
+    background = max(counts.items(), key=lambda item: item[1])[0]
+
+    separator_rows = []
+    for y in range(height):
+        row = rows[y]
+        if all(pixel == row[0] for pixel in row) and row[0] != background:
+            separator_rows.append(y)
+
+    separator_cols = []
+    for x in range(width):
+        column = [rows[y][x] for y in range(height)]
+        if all(pixel == column[0] for pixel in column) and column[0] != background:
+            separator_cols.append(x)
+
+    if len(separator_rows) != 2 or len(separator_cols) != 2:
+        raise ValueError(
+            f"Expected a 3x3 grid in the PNG, found separator rows={separator_rows} cols={separator_cols}"
+        )
+
+    return separator_rows, separator_cols, background
+
+
+def cell_pixels(
+    rows: list[list[tuple[int, int, int, int]]],
+    x_range: range,
+    y_range: range,
+    background: tuple[int, int, int, int],
+) -> list[list[tuple[int, int, int, int]]]:
+    bitmap: list[list[tuple[int, int, int, int]]] = []
+    for y in y_range:
+        row_pixels = []
+        for x in x_range:
+            pixel = rows[y][x]
+            row_pixels.append(background if pixel == background else pixel)
+        bitmap.append(row_pixels)
+    return bitmap
+
+
+def scale_pixels(
+    pixels: list[list[tuple[int, int, int, int]]],
+    target_width: int = 12,
+    target_height: int = 21,
+) -> list[list[tuple[int, int, int, int]]]:
+    source_height = len(pixels)
+    source_width = len(pixels[0])
+    scaled: list[list[tuple[int, int, int, int]]] = []
+    for y in range(target_height):
+        source_y = min((y * source_height) // target_height, source_height - 1)
+        row_pixels = []
+        for x in range(target_width):
+            source_x = min((x * source_width) // target_width, source_width - 1)
+            row_pixels.append(pixels[source_y][source_x])
+        scaled.append(row_pixels)
+    return scaled
+
+
+def pixels_to_color_codes(
+    pixels: list[list[tuple[int, int, int, int]]],
+    color_codes: dict[tuple[int, int, int, int], int],
+) -> list[list[int]]:
+    rows: list[list[int]] = []
+    for row in pixels:
+        rows.append([color_codes.get(pixel, 0) for pixel in row])
+    return rows
+
+
+def pack_multicolor_sprite_bytes(color_rows: list[list[int]]) -> list[int]:
+    packed: list[int] = []
+    for row in color_rows:
+        row_value = 0
+        for code in row:
+            row_value = (row_value << 2) | (code & 0b11)
+        packed.extend(((row_value >> 16) & 0xFF, (row_value >> 8) & 0xFF, row_value & 0xFF))
+    packed.append(0)
+    return packed
+
+
+def format_byte_rows(data: list[int]) -> list[str]:
+    rows = []
+    for offset in range(0, 63, 3):
+        chunk = data[offset : offset + 3]
+        rows.append("  .byte " + ",".join(f"%{value:08b}" for value in chunk))
+    rows.append("  .byte $00")
+    return rows
+
+
+def sprite_block(address: int, title: str, label: str, data: list[int]) -> str:
+    lines = [f'* = ${address:04x} "{title}"', "", f"{label}:"]
+    lines.extend(format_byte_rows(data))
+    return "\n".join(lines)
+
+
+def generate_source(png_path: Path) -> str:
+    _, _, rows = decode_png_rgba(png_path)
+    separator_rows, separator_cols, background = find_separators(rows)
+
+    x_ranges = split_ranges(len(rows[0]), separator_cols)
+    y_ranges = split_ranges(len(rows), separator_rows)
+
+    if len(x_ranges) != 3 or len(y_ranges) != 3:
+        raise ValueError(f"Expected 3 cell ranges in each direction, got x={x_ranges}, y={y_ranges}")
+
+    blocks = [
+        f"// Generated from {png_path.name} by scripts/generate_arcade_enemy_sprites.py.",
+        "// Do not edit by hand.",
+        "",
+    ]
+
+    base_address = 0x2000
+    sprite_index = 0
+    for row_index, row_label in enumerate(ROW_LABELS):
+        for frame_index in range(3):
+            pixels = cell_pixels(rows, x_ranges[frame_index], y_ranges[row_index], background)
+            scaled = scale_pixels(pixels)
+            codes = pixels_to_color_codes(scaled, ROW_COLOR_CODES[row_index])
+            packed = pack_multicolor_sprite_bytes(codes)
+            title = f"{row_label.capitalize()} Sprite {frame_index}"
+            label = f"{row_label}_sprite_frame{frame_index}"
+            address = base_address + sprite_index * 0x40
+            blocks.append(sprite_block(address, title, label, packed))
+            blocks.append("")
+            sprite_index += 1
+
+    return "\n".join(blocks).rstrip() + "\n"
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Generate C64 enemy sprite data from ArcadeGalaxian3ships.png.")
+    parser.add_argument(
+        "--png",
+        default="ArcadeGalaxian3ships.png",
+        help="Input PNG sprite sheet",
+    )
+    parser.add_argument(
+        "--out",
+        default="src/generated_enemy_sprites.asm",
+        help="Generated KickAssembler source file",
+    )
+    args = parser.parse_args()
+
+    png_path = Path(args.png)
+    output_path = Path(args.out)
+    output_path.write_text(generate_source(png_path), encoding="utf-8")
+    print(f"Wrote {output_path}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

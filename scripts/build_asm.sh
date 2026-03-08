@@ -13,6 +13,8 @@ fi
 
 EXTRA_ARGS=("$@")
 
+python3 scripts/generate_arcade_enemy_sprites.py
+
 scripts/install_kickassembler.sh
 JAVA_BIN="$(scripts/find_java.sh)"
 

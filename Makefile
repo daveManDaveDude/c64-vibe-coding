@@ -1,4 +1,4 @@
-.PHONY: all build d64 run run-live run-timed build-asm d64-asm run-asm run-asm-live run-asm-timed verify-asm playtest-asm playtest-asm-visible clean
+.PHONY: all build d64 run run-live run-timed build-asm d64-asm run-asm run-asm-live run-asm-timed verify-asm playtest-asm playtest-asm-visible debug-sprites clean
 
 all: run-live
 
@@ -40,6 +40,10 @@ playtest-asm:
 
 playtest-asm-visible:
 	./scripts/playtest_asm_visible.sh
+
+debug-sprites:
+	python3 scripts/generate_arcade_enemy_sprites.py
+	python3 scripts/debug_sprite_frames.py --grouped
 
 clean:
 	rm -rf build artifacts

@@ -33,6 +33,8 @@ BasicUpstart2(start)
 .label SPRITE6_Y = $d00d
 .label SPRITE7_X = $d00e
 .label SPRITE7_Y = $d00f
+.label SPRITE_MULTICOLOR_0 = $d025
+.label SPRITE_MULTICOLOR_1 = $d026
 .label SPRITE0_COLOR = $d027
 .label SPRITE1_COLOR = $d028
 .label SPRITE2_COLOR = $d029
@@ -44,9 +46,11 @@ BasicUpstart2(start)
 
 .label HUD_TEXT_COLOR = $01
 .label PLAYFIELD_TEXT_COLOR = $0e
+.label FORMATION_MULTI0_COLOR = $06
+.label FORMATION_MULTI1_COLOR = $02
 .label FLAGSHIP_COLOR = $07
-.label ESCORT_COLOR = $0d
-.label GRUNT_COLOR = $05
+.label ESCORT_COLOR = $04
+.label GRUNT_COLOR = $03
 .label HIT_FLASH_COLOR = $01
 .label BORDER_BASE_COLOR = $06
 .label FORMATION_START_X_LO = $58
@@ -64,9 +68,15 @@ BasicUpstart2(start)
 .label FORMATION_SLOT3_OFFSET = 36
 .label FORMATION_SLOT4_OFFSET = 0
 .label FORMATION_SLOT5_OFFSET = 36
-.label FLAGSHIP_SPRITE_PTR = $80
-.label ESCORT_SPRITE_PTR = $81
-.label GRUNT_SPRITE_PTR = $82
+.label FLAGSHIP_SPRITE0_PTR = $80
+.label FLAGSHIP_SPRITE1_PTR = $81
+.label FLAGSHIP_SPRITE2_PTR = $82
+.label ESCORT_SPRITE0_PTR = $83
+.label ESCORT_SPRITE1_PTR = $84
+.label ESCORT_SPRITE2_PTR = $85
+.label GRUNT_SPRITE0_PTR = $86
+.label GRUNT_SPRITE1_PTR = $87
+.label GRUNT_SPRITE2_PTR = $88
 .label FORMATION_SLOT0_MASK = %00000001
 .label FORMATION_SLOT1_MASK = %00001000
 .label FORMATION_SLOT2_MASK = %00010000
@@ -83,9 +93,9 @@ BasicUpstart2(start)
 .label PLAYER_MIN_X_HI = $00
 .label PLAYER_MAX_X_LO = $40
 .label PLAYER_MAX_X_HI = $01
-.label PLAYER_SPRITE_PTR = $83
+.label PLAYER_SPRITE_PTR = $89
 .label SHOT_COLOR = $01
-.label SHOT_SPRITE_PTR = $84
+.label SHOT_SPRITE_PTR = $8a
 .label SHOT_START_Y = PLAYER_Y - 12
 .label SHOT_SPEED = 10
 .label SHOT_MIN_Y = 16
@@ -102,6 +112,7 @@ BasicUpstart2(start)
 .label SCORE_GRUNT_LO = $30
 .label SCORE_GRUNT_MID = $00
 .label SCORE_GRUNT_HI = $00
+.label FORMATION_ANIMATION_SHIFT = 4
 
 * = $1000 "Main Program"
 
@@ -186,18 +197,6 @@ init_score:
   rts
 
 init_formation:
-  lda #FLAGSHIP_SPRITE_PTR
-  sta SPRITE_POINTERS
-  sta SPRITE_POINTERS + 3
-
-  lda #ESCORT_SPRITE_PTR
-  sta SPRITE_POINTERS + 4
-  sta SPRITE_POINTERS + 5
-
-  lda #GRUNT_SPRITE_PTR
-  sta SPRITE_POINTERS + 6
-  sta SPRITE_POINTERS + 7
-
   lda #FORMATION_START_X_LO
   sta formation_x_lo
   lda #FORMATION_START_X_HI
@@ -226,9 +225,16 @@ init_formation:
   sta formation_frame
   sta SPRITE_X_MSB
   sta SPRITE_PRIORITY
-  sta SPRITE_MULTICOLOR
   sta SPRITE_X_EXPAND
   sta SPRITE_Y_EXPAND
+
+  lda #FORMATION_SPRITE_MASK
+  sta SPRITE_MULTICOLOR
+
+  lda #FORMATION_MULTI0_COLOR
+  sta SPRITE_MULTICOLOR_0
+  lda #FORMATION_MULTI1_COLOR
+  sta SPRITE_MULTICOLOR_1
 
   lda #FLAGSHIP_COLOR
   sta SPRITE0_COLOR
@@ -240,6 +246,7 @@ init_formation:
   sta SPRITE6_COLOR
   sta SPRITE7_COLOR
 
+  jsr update_formation_animation
   jsr store_formation_x
 
   lda #FORMATION_SPRITE_MASK
@@ -328,6 +335,7 @@ effects_done:
 
 update_formation:
   inc formation_frame
+  jsr update_formation_animation
   lda formation_frame
   and #$01
   bne formation_done
@@ -385,6 +393,27 @@ formation_store_x:
   jsr store_formation_x
 
 formation_done:
+  rts
+
+update_formation_animation:
+  lda formation_frame
+  .for (var i = 0; i < FORMATION_ANIMATION_SHIFT; i++) {
+    lsr
+  }
+  and #%00000011
+  tax
+
+  lda flagship_animation_sequence, x
+  sta SPRITE_POINTERS
+  sta SPRITE_POINTERS + 3
+
+  lda escort_animation_sequence, x
+  sta SPRITE_POINTERS + 4
+  sta SPRITE_POINTERS + 5
+
+  lda grunt_animation_sequence, x
+  sta SPRITE_POINTERS + 6
+  sta SPRITE_POINTERS + 7
   rts
 
 update_player:
@@ -1033,85 +1062,16 @@ score_award_hi:
 hud_row0:
   .byte 19,3,15,18,5,32,48,48,48,48,32,32,32,32,32,32,32,32,32,12,9,22,5,19,32,51,0
 
-* = $2000 "Flagship Sprite"
+flagship_animation_sequence:
+  .byte FLAGSHIP_SPRITE0_PTR,FLAGSHIP_SPRITE1_PTR,FLAGSHIP_SPRITE0_PTR,FLAGSHIP_SPRITE1_PTR
+escort_animation_sequence:
+  .byte ESCORT_SPRITE0_PTR,ESCORT_SPRITE1_PTR,ESCORT_SPRITE0_PTR,ESCORT_SPRITE1_PTR
+grunt_animation_sequence:
+  .byte GRUNT_SPRITE0_PTR,GRUNT_SPRITE1_PTR,GRUNT_SPRITE0_PTR,GRUNT_SPRITE1_PTR
 
-flagship_sprite:
-  .byte $00,$18,$00
-  .byte $00,$18,$00
-  .byte $00,$3c,$00
-  .byte $00,$7e,$00
-  .byte $01,$ff,$80
-  .byte $03,$ff,$c0
-  .byte $07,$ff,$e0
-  .byte $0e,$ff,$70
-  .byte $1f,$ff,$f8
-  .byte $3f,$ff,$fc
-  .byte $7f,$bd,$fe
-  .byte $ff,$ff,$ff
-  .byte $77,$ff,$ee
-  .byte $1f,$ff,$f8
-  .byte $0e,$7e,$70
-  .byte $1c,$00,$38
-  .byte $38,$00,$1c
-  .byte $70,$00,$0e
-  .byte $20,$00,$04
-  .byte $00,$00,$00
-  .byte $00,$00,$00
-  .byte $00
+#import "generated_enemy_sprites.asm"
 
-* = $2040 "Escort Sprite"
-
-escort_sprite:
-  .byte $00,$00,$00
-  .byte $00,$24,$00
-  .byte $00,$66,$00
-  .byte $01,$ff,$80
-  .byte $03,$ff,$c0
-  .byte $07,$e7,$e0
-  .byte $0f,$ff,$f0
-  .byte $1f,$ff,$f8
-  .byte $3d,$ff,$bc
-  .byte $7f,$ff,$fe
-  .byte $3f,$ff,$fc
-  .byte $1b,$ff,$d8
-  .byte $0f,$ff,$f0
-  .byte $06,$66,$60
-  .byte $0c,$00,$30
-  .byte $18,$00,$18
-  .byte $10,$00,$08
-  .byte $00,$00,$00
-  .byte $00,$00,$00
-  .byte $00,$00,$00
-  .byte $00,$00,$00
-  .byte $00
-
-* = $2080 "Grunt Sprite"
-
-grunt_sprite:
-  .byte $00,$00,$00
-  .byte $00,$00,$00
-  .byte $00,$18,$00
-  .byte $00,$3c,$00
-  .byte $00,$7e,$00
-  .byte $01,$ff,$80
-  .byte $03,$ff,$c0
-  .byte $07,$db,$e0
-  .byte $0f,$ff,$f0
-  .byte $1f,$ff,$f8
-  .byte $0f,$ff,$f0
-  .byte $07,$ff,$e0
-  .byte $03,$c3,$c0
-  .byte $07,$00,$e0
-  .byte $0e,$00,$70
-  .byte $0c,$00,$30
-  .byte $18,$00,$18
-  .byte $10,$00,$08
-  .byte $00,$00,$00
-  .byte $00,$00,$00
-  .byte $00,$00,$00
-  .byte $00
-
-* = $20c0 "Player Sprite"
+* = $2240 "Player Sprite"
 
 player_sprite:
   .byte $00,$00,$00
@@ -1137,7 +1097,7 @@ player_sprite:
   .byte $60,$00,$06
   .byte $00
 
-* = $2100 "Shot Sprite"
+* = $2280 "Shot Sprite"
 
 shot_sprite:
   .byte $00,$ff,$00
