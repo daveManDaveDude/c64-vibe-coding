@@ -114,7 +114,6 @@ make clean
 ## Assembly Targets
 
 - `make build-asm`: `src/hello-asm.asm` -> `build/hello-asm.prg`
-- `make build-asm-autoplay`: autoplay build -> `build/autoplay/hello-asm.prg`
 - `make d64-asm`: creates `build/hello-asm.d64` and writes `HELLOASM`
 - `make run-asm`: assembly live mode
 - `make run-asm-live`: assembly live alias
@@ -131,14 +130,14 @@ It uses KickAssembler's `BasicUpstart2(start)` macro to generate the BASIC stub 
 
 ## Assembly Autoplay
 
-The repo also includes a monitor-driven autoplay build/test path for the current Galaxian shell.
+The repo includes an external autoplay/playtest path for the current Galaxian shell.
 
-- `scripts/build_asm_autoplay.sh` builds an autoplay variant with a test-only input hook.
-- `scripts/run_vice_binary_monitor.sh` launches VICE in console mode with the binary monitor enabled on `127.0.0.1:6502`.
-- `scripts/run_vice_binary_monitor_visible.sh` launches the same binary-monitor test path with the normal VICE window visible.
-- `scripts/playtest_asm.py` drives the game through the monitor, verifies left/right player movement and clamp behavior, and checks that the alien keeps moving and bounces.
+- `scripts/playtest_asm.py` launches the normal `build/hello-asm.prg` in visible VICE, connects to the VICE binary monitor for low-frequency hardware sampling, and drives the player with real macOS key events.
+- The playtest generates a temporary VICE symbolic keymap so host `Left`/`Right` keys act as joystick port 2.
+- Assertions are based on generic C64 hardware state only: joystick port 2 input and VIC sprite registers. No autoplay-specific code is compiled into the game.
+- The harness tries to capture host window screenshots at each sample when macOS Screen Recording is available, and VICE always writes a final exit screenshot as a visual artifact.
 
-This path is VICE-native automation. `make playtest-asm` stays headless/console-friendly and uses monitor-driven step polling. `make playtest-asm-visible` switches the autoplay build into an internal scripted self-test mode so the emulator can keep running smoothly while you watch the window.
+This path is intentionally human-like on the input side and low-intrusion on the verification side: the game is exercised through normal joystick input, while the monitor is sampled about once per second so the emulator stays visually smooth.
 
 ## VS Code Integration
 
@@ -182,11 +181,15 @@ Assembly autoplay smoke test:
 - `artifacts/playtest-asm.log`
 - `artifacts/playtest-asm.json`
 - `artifacts/playtest-asm-vice.log`
+- `artifacts/playtest-asm-frames/`
+- `artifacts/playtest-asm-exit.png`
 
 Visible assembly autoplay smoke test:
 - `artifacts/playtest-asm-visible.log`
 - `artifacts/playtest-asm-visible.json`
 - `artifacts/playtest-asm-visible-vice.log`
+- `artifacts/playtest-asm-visible-frames/`
+- `artifacts/playtest-asm-visible-exit.png`
 
 ## Notes
 
@@ -194,8 +197,8 @@ Visible assembly autoplay smoke test:
 - Timed mode may report a VICE non-zero exit when cycle limit is reached; pipeline handling normalizes this in `run_status.txt`.
 - `c1541` may print `OPENCBM` dynamic library warnings on macOS Homebrew installs; `.d64` creation still works for this workflow.
 - In Codex or other sandboxed environments, VICE GUI targets may require running outside the sandbox to access macOS display services. Use `make verify-asm` for non-GUI verification, and use `make run-asm` / `make run-asm-timed` from a normal host session for interactive/manual testing.
-- `make playtest-asm` uses the VICE binary monitor on `127.0.0.1:6502`. In a sandboxed Codex session that localhost socket may require escalated permissions; on a normal local macOS shell it runs directly.
-- `make playtest-asm-visible` also uses the binary monitor, but it opens the normal VICE GUI window and relies on an in-game autoplay state machine so monitor polling does not visibly slow the game down.
+- `make playtest-asm` and `make playtest-asm-visible` are macOS GUI playtests. They need the shell host app to have Accessibility permission for `System Events` keyboard control. Screen Recording is only needed for the optional per-sample host screenshots.
+- The playtest still uses the VICE binary monitor on `127.0.0.1:6502` for generic hardware reads. In a sandboxed Codex session that localhost socket may require escalated permissions; on a normal local macOS shell it runs directly.
 
 ## Debugging in VS Code (BASIC step-through)
 

@@ -1,3 +1,4 @@
-artifacts/vice-readme.log
+artifacts/
+build/.pycache/
 tools/KickAssembler.zip
 tools/KickAssembler/

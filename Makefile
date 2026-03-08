@@ -1,4 +1,4 @@
-.PHONY: all build d64 run run-live run-timed build-asm build-asm-autoplay d64-asm run-asm run-asm-live run-asm-timed verify-asm playtest-asm playtest-asm-visible clean
+.PHONY: all build d64 run run-live run-timed build-asm d64-asm run-asm run-asm-live run-asm-timed verify-asm playtest-asm playtest-asm-visible clean
 
 all: run-live
 
@@ -19,9 +19,6 @@ run-live:
 
 build-asm:
 	./scripts/build_asm.sh
-
-build-asm-autoplay:
-	./scripts/build_asm_autoplay.sh
 
 d64-asm: build-asm
 	./scripts/make_d64.sh build/hello-asm.prg build/hello-asm.d64 ASMHELLO 00 HELLOASM

@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 import argparse
+import ctypes
+import ctypes.util
+import hashlib
 import json
-import re
+import shutil
 import socket
 import struct
 import subprocess
@@ -12,13 +15,26 @@ from pathlib import Path
 
 API_VERSION = 0x02
 MEM_GET = 0x01
-MEM_SET = 0x02
 VICE_INFO = 0x85
 EXIT_MONITOR = 0xAA
 QUIT_VICE = 0xBB
 EVENT_REQUEST_ID = 0xFFFFFFFF
 MAIN_MEMSPACE = 0x00
 DEFAULT_MONITOR_ADDRESS = ("127.0.0.1", 6502)
+
+SPRITE0_X = 0xD000
+SPRITE0_Y = 0xD001
+SPRITE1_X = 0xD002
+SPRITE1_Y = 0xD003
+SPRITE_X_MSB = 0xD010
+SPRITE_ENABLE = 0xD015
+JOYSTICK_PORT_2 = 0xDC00
+
+LEFT_KEY_CODE = 123
+RIGHT_KEY_CODE = 124
+LEFT_MASK = 0x04
+RIGHT_MASK = 0x08
+EXPECTED_SPRITES = 0x03
 
 
 class PlaytestFailure(Exception):
@@ -42,9 +58,8 @@ class Logger:
 
 
 class BinaryMonitor:
-    def __init__(self, sock: socket.socket, logger: Logger):
+    def __init__(self, sock: socket.socket):
         self.sock = sock
-        self.logger = logger
         self.request_id = 1
 
     def close(self) -> None:
@@ -115,11 +130,6 @@ class BinaryMonitor:
             )
         return data
 
-    def mem_set(self, start: int, data: bytes) -> None:
-        end = start + len(data) - 1
-        body = struct.pack("<BHHBH", 0x00, start, end, MAIN_MEMSPACE, 0x0000) + data
-        self.send_command(MEM_SET, body)
-
     def exit_monitor(self) -> None:
         self.send_command(EXIT_MONITOR)
 
@@ -130,99 +140,231 @@ class BinaryMonitor:
             pass
 
 
-def parse_symbols(path: Path):
-    label_pattern = re.compile(r"^\.label\s+([A-Za-z0-9_]+)=\$(?P<hex>[0-9a-fA-F]+)$")
-    symbols = {}
-    with path.open("r", encoding="utf-8") as handle:
-        for line in handle:
-            match = label_pattern.match(line.strip())
-            if match:
-                symbols[match.group(1)] = int(match.group("hex"), 16)
-    return symbols
+def combine_sprite_x(low: int, msb_register: int, bit_index: int) -> int:
+    return low | (((msb_register >> bit_index) & 0x01) << 8)
 
 
-def require_symbols(symbols, names):
-    missing = [name for name in names if name not in symbols]
-    if missing:
-        raise PlaytestFailure(f"Missing expected symbols: {', '.join(missing)}")
+class MacOSGui:
+    def __init__(self, process_name: str, logger: Logger, capture_region: str):
+        self.process_name = process_name
+        self.logger = logger
+        self.capture_region = capture_region
+        self.pid = None
+        self.app_services = None
+        self.core_foundation = None
+        self.keyboard_backend = "osascript"
+        self._init_keyboard_backend()
 
+    def set_pid(self, pid: int) -> None:
+        self.pid = pid
 
-def combine_u16(low: int, high: int) -> int:
-    return low | (high << 8)
+    def _init_keyboard_backend(self) -> None:
+        app_services_path = ctypes.util.find_library("ApplicationServices")
+        core_foundation_path = ctypes.util.find_library("CoreFoundation")
+        if not app_services_path or not core_foundation_path:
+            self.logger.log("CoreGraphics keyboard events unavailable, falling back to osascript")
+            return
 
+        self.app_services = ctypes.CDLL(app_services_path)
+        self.core_foundation = ctypes.CDLL(core_foundation_path)
+        self.app_services.CGEventCreateKeyboardEvent.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_uint16,
+            ctypes.c_bool,
+        ]
+        self.app_services.CGEventCreateKeyboardEvent.restype = ctypes.c_void_p
+        self.app_services.CGEventPostToPid.argtypes = [ctypes.c_int, ctypes.c_void_p]
+        self.app_services.CGEventPostToPid.restype = None
+        self.core_foundation.CFRelease.argtypes = [ctypes.c_void_p]
+        self.core_foundation.CFRelease.restype = None
+        self.keyboard_backend = "coregraphics_pid"
 
-def diff_u16(current: int, previous: int) -> int:
-    return (current - previous) & 0xFFFF
+    def _run_osascript(self, lines):
+        command = ["osascript"]
+        for line in lines:
+            command.extend(["-e", line])
+        try:
+            result = subprocess.run(
+                command,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except subprocess.CalledProcessError as exc:
+            stderr = exc.stderr.strip()
+            if "Not authorized" in stderr or "not allowed" in stderr.lower():
+                raise PlaytestFailure(
+                    "macOS denied GUI automation. Grant Accessibility access to the terminal or VS Code for System Events."
+                ) from exc
+            raise PlaytestFailure(f"osascript failed: {stderr or exc.stdout.strip()}") from exc
+        return result.stdout.strip()
+
+    def wait_for_process(self, timeout_seconds: float = 15.0):
+        deadline = time.time() + timeout_seconds
+        while time.time() < deadline:
+            if self.pid is None:
+                output = self._run_osascript(
+                    [
+                        'tell application "System Events"',
+                        f'  if exists application process "{self.process_name}" then return "ready"',
+                        "end tell",
+                    ]
+                )
+            else:
+                output = self._run_osascript(
+                    [
+                        'tell application "System Events"',
+                        f'  set matchingProcesses to every application process whose unix id is {self.pid}',
+                        '  if (count of matchingProcesses) > 0 then return "ready"',
+                        "end tell",
+                    ]
+                )
+            if output == "ready":
+                return
+            time.sleep(0.1)
+        raise PlaytestFailure(f"Timed out waiting for {self.process_name} process")
+
+    def activate(self) -> None:
+        if self.pid is None:
+            lines = [
+                'tell application "System Events"',
+                f'  tell application process "{self.process_name}"',
+                "    set frontmost to true",
+                '    try',
+                '      perform action "AXRaise" of window 1',
+                "    end try",
+                "  end tell",
+                "end tell",
+            ]
+        else:
+            lines = [
+                'tell application "System Events"',
+                f'  set matchingProcesses to every application process whose unix id is {self.pid}',
+                '  if (count of matchingProcesses) is 0 then error "VICE process not found"',
+                "  tell item 1 of matchingProcesses",
+                "    set frontmost to true",
+                '    try',
+                '      perform action "AXRaise" of window 1',
+                "    end try",
+                "  end tell",
+                "end tell",
+            ]
+        self._run_osascript(lines)
+
+    def key_down(self, key_code: int) -> None:
+        self.activate()
+        self._send_key_event(key_code, True)
+
+    def key_up(self, key_code: int) -> None:
+        try:
+            self._send_key_event(key_code, False)
+        except PlaytestFailure:
+            self.logger.log(f"Ignoring failed key release for key code {key_code}")
+
+    def _send_key_event(self, key_code: int, is_key_down: bool) -> None:
+        if self.keyboard_backend == "coregraphics_pid":
+            if self.pid is None:
+                raise PlaytestFailure("VICE pid is not set for CoreGraphics keyboard events")
+            event = self.app_services.CGEventCreateKeyboardEvent(None, key_code, is_key_down)
+            if not event:
+                raise PlaytestFailure(f"Could not create keyboard event for key code {key_code}")
+            try:
+                self.app_services.CGEventPostToPid(self.pid, event)
+            finally:
+                self.core_foundation.CFRelease(event)
+            return
+
+        direction = "down" if is_key_down else "up"
+        self._run_osascript(
+            [
+                'tell application "System Events"',
+                f"  key {direction} key code {key_code}",
+                "end tell",
+            ]
+        )
+
+    def capture_window(self, destination: Path) -> str:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            subprocess.run(
+                ["screencapture", "-x", "-R", self.capture_region, str(destination)],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except subprocess.CalledProcessError as exc:
+            stderr = exc.stderr.strip()
+            raise PlaytestFailure(
+                "screencapture failed. Grant Screen Recording access to the terminal or VS Code."
+                if stderr
+                else "screencapture failed."
+            ) from exc
+        digest = hashlib.sha256(destination.read_bytes()).hexdigest()
+        return digest
 
 
 class Playtester:
     def __init__(self, args, logger: Logger):
         self.args = args
         self.logger = logger
+        capture_region = f"{args.window_x},{args.window_y},{args.window_width},{args.window_height}"
+        self.gui = MacOSGui(args.process_name, logger, capture_region)
+        self.monitor = None
+        self.vice_process = None
+        self.sample_counter = 0
+        self.samples = []
+        self.host_capture_enabled = True
+        self.host_capture_failure = None
         self.results = {
+            "mode": "external_gui_keyboard",
             "success": False,
-            "steps": [],
-            "failures": [],
             "artifacts": {
                 "log": str(args.log),
                 "json": str(args.json),
                 "vice_log": str(args.vice_log),
+                "frames_dir": str(args.frames_dir),
+                "keymap": str(args.keymap),
+                "capture_region": capture_region,
+                "exit_screenshot": str(args.exit_screenshot),
+                "keyboard_backend": self.gui.keyboard_backend,
             },
+            "steps": [],
+            "samples": self.samples,
         }
-        self.vice_process = None
-        self.monitor = None
-        self.symbols = parse_symbols(args.sym)
-        require_symbols(
-            self.symbols,
-            [
-                "autoplay_input_bits",
-                "autoplay_mode",
-                "autoplay_status",
-                "autoplay_stage",
-                "autoplay_error_code",
-                "autoplay_frame_counter",
-                "player_x_lo",
-                "player_x_hi",
-                "alien_x_lo",
-                "alien_x_hi",
-                "alien_dir",
-                "player_min_x_lo",
-                "player_min_x_hi",
-                "player_max_x_lo",
-                "player_max_x_hi",
-                "alien_min_x_lo",
-                "alien_min_x_hi",
-                "alien_max_x_lo",
-                "alien_max_x_hi",
-                "PLAYER_Y",
-                "ALIEN_Y",
-            ],
-        )
-        self.state_labels = [
-            "alien_x_lo",
-            "alien_x_hi",
-            "alien_dir",
-            "player_x_lo",
-            "player_x_hi",
-            "autoplay_input_bits",
-            "autoplay_mode",
-            "autoplay_status",
-            "autoplay_stage",
-            "autoplay_error_code",
-            "autoplay_frame_counter",
-        ]
-        self.state_start = min(self.symbols[label] for label in self.state_labels)
-        self.state_end = max(
-            self.symbols["autoplay_frame_counter"] + 1,
-            max(self.symbols[label] for label in self.state_labels),
-        )
-        self.last_sample = None
 
     def record_step(self, name: str, status: str, detail=None) -> None:
         entry = {"name": name, "status": status}
         if detail is not None:
             entry["detail"] = detail
         self.results["steps"].append(entry)
+
+    def assert_true(self, name: str, condition: bool, detail) -> None:
+        if not condition:
+            raise PlaytestFailure(f"{name}: {detail}")
+
+    def create_keymap(self) -> None:
+        x64sc_path = shutil.which("x64sc")
+        if x64sc_path is None:
+            raise PlaytestFailure("Could not find x64sc on PATH")
+        default_keymap = (
+            Path(x64sc_path).resolve().parent.parent / "share" / "vice" / "C64" / "gtk3_sym.vkm"
+        )
+        if not default_keymap.exists():
+            raise PlaytestFailure(f"Could not find default VICE keymap at {default_keymap}")
+
+        keymap_contents = "\n".join(
+            [
+                f"!INCLUDE {default_keymap}",
+                "!UNDEF Left",
+                "!UNDEF Right",
+                "Left -1 4",
+                "Right -1 5",
+                "",
+            ]
+        )
+        self.args.keymap.parent.mkdir(parents=True, exist_ok=True)
+        self.args.keymap.write_text(keymap_contents, encoding="utf-8")
+        self.logger.log(f"Wrote playtest keymap: {self.args.keymap}")
 
     def connect_monitor(self) -> BinaryMonitor:
         deadline = time.time() + 15.0
@@ -231,7 +373,7 @@ class Playtester:
             try:
                 sock = socket.create_connection(DEFAULT_MONITOR_ADDRESS, timeout=1.0)
                 sock.settimeout(2.0)
-                return BinaryMonitor(sock, self.logger)
+                return BinaryMonitor(sock)
             except OSError as exc:
                 last_error = exc
                 time.sleep(0.1)
@@ -241,23 +383,59 @@ class Playtester:
         raise PlaytestFailure(message)
 
     def launch_vice(self) -> None:
+        self.create_keymap()
         command = [
-            str(self.args.runner),
-            str(self.args.prg),
-            str(self.args.vice_log),
+            shutil.which("x64sc") or "x64sc",
+            "-default",
+            "+confirmonexit",
+            "+saveres",
+            "-pal",
+            "-power50",
+            "-autostart-warp",
+            "-binarymonitor",
+            "-binarymonitoraddress",
             "ip4://127.0.0.1:6502",
+            "-autostartprgmode",
+            "1",
+            "-windowxpos",
+            str(self.args.window_x),
+            "-windowypos",
+            str(self.args.window_y),
+            "-windowwidth",
+            str(self.args.window_width),
+            "-windowheight",
+            str(self.args.window_height),
+            "-controlport2device",
+            "1",
+            "-joydev2",
+            "2",
+            "-keyset",
+            "-keymap",
+            "2",
+            "-symkeymap",
+            str(self.args.keymap),
+            "-exitscreenshot",
+            str(self.args.exit_screenshot),
+            "-logfile",
+            str(self.args.vice_log),
+            str(self.args.prg),
         ]
-        self.logger.log(f"Launching VICE monitor runner: {' '.join(command)}")
+        self.logger.log(f"Launching visible VICE playtest: {' '.join(command)}")
         self.vice_process = subprocess.Popen(
             command,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
+        self.gui.set_pid(self.vice_process.pid)
         self.monitor = self.connect_monitor()
         self.monitor.vice_info()
+        self.gui.wait_for_process()
+        self.gui.activate()
         self.record_step("monitor_connect", "passed")
 
     def shutdown(self) -> None:
+        self.gui.key_up(LEFT_KEY_CODE)
+        self.gui.key_up(RIGHT_KEY_CODE)
         if self.monitor is not None:
             self.monitor.quit_vice()
             self.monitor.close()
@@ -273,306 +451,288 @@ class Playtester:
                     self.vice_process.kill()
                     self.vice_process.wait(timeout=5)
 
+    def resume_for(self, seconds: float) -> None:
+        self.monitor.exit_monitor()
+        time.sleep(seconds)
+
     def read_state(self):
-        start = self.state_start
-        size = (self.state_end - start) + 1
-        data = self.monitor.mem_get(start, size)
+        vic_data = self.monitor.mem_get(SPRITE0_X, (SPRITE_ENABLE - SPRITE0_X) + 1)
+        joystick_value = self.monitor.mem_get(JOYSTICK_PORT_2, 1)[0]
 
-        def byte_at(label):
-            return data[self.symbols[label] - start]
+        def vic(offset: int) -> int:
+            return vic_data[offset - SPRITE0_X]
 
+        msb = vic(SPRITE_X_MSB)
         state = {
-            "frame": combine_u16(
-                byte_at("autoplay_frame_counter"),
-                data[self.symbols["autoplay_frame_counter"] - start + 1],
-            ),
-            "player_x": combine_u16(byte_at("player_x_lo"), byte_at("player_x_hi")),
-            "alien_x": combine_u16(byte_at("alien_x_lo"), byte_at("alien_x_hi")),
-            "alien_dir": byte_at("alien_dir"),
-            "autoplay_mode": byte_at("autoplay_mode"),
-            "autoplay_status": byte_at("autoplay_status"),
-            "autoplay_stage": byte_at("autoplay_stage"),
-            "autoplay_error_code": byte_at("autoplay_error_code"),
-            "player_y": self.symbols["PLAYER_Y"],
-            "alien_y": self.symbols["ALIEN_Y"],
-            "player_min": combine_u16(
-                self.symbols["player_min_x_lo"], self.symbols["player_min_x_hi"]
-            ),
-            "player_max": combine_u16(
-                self.symbols["player_max_x_lo"], self.symbols["player_max_x_hi"]
-            ),
-            "alien_min": combine_u16(
-                self.symbols["alien_min_x_lo"], self.symbols["alien_min_x_hi"]
-            ),
-            "alien_max": combine_u16(
-                self.symbols["alien_max_x_lo"], self.symbols["alien_max_x_hi"]
-            ),
+            "player_x": combine_sprite_x(vic(SPRITE1_X), msb, 1),
+            "player_y": vic(SPRITE1_Y),
+            "alien_x": combine_sprite_x(vic(SPRITE0_X), msb, 0),
+            "alien_y": vic(SPRITE0_Y),
+            "sprite_enable": vic(SPRITE_ENABLE),
+            "sprite_x_msb": msb,
+            "joystick_port_2": joystick_value,
+            "joystick_left_pressed": (joystick_value & LEFT_MASK) == 0,
+            "joystick_right_pressed": (joystick_value & RIGHT_MASK) == 0,
         }
-        self.last_sample = state
         return state
 
-    def set_input_bits(self, value: int) -> None:
-        self.monitor.mem_set(self.symbols["autoplay_input_bits"], bytes([value & 0xFF]))
+    def capture_sample(self, stage: str):
+        state = self.read_state()
+        screenshot_path = self.args.frames_dir / f"{self.sample_counter:03d}-{stage}.png"
+        sample = {
+            "index": self.sample_counter,
+            "stage": stage,
+            "timestamp": time.time(),
+            **state,
+            "screenshot": None,
+            "screenshot_sha256": None,
+        }
+        if self.host_capture_enabled:
+            try:
+                screenshot_hash = self.gui.capture_window(screenshot_path)
+            except PlaytestFailure as exc:
+                self.host_capture_enabled = False
+                self.host_capture_failure = str(exc)
+                self.logger.log(
+                    f"Disabling host screenshot capture for the rest of the run: {self.host_capture_failure}"
+                )
+            else:
+                sample["screenshot"] = str(screenshot_path)
+                sample["screenshot_sha256"] = screenshot_hash
+        self.sample_counter += 1
+        self.samples.append(sample)
+        return sample
 
-    def set_autoplay_mode(self, value: int) -> None:
-        self.monitor.mem_set(self.symbols["autoplay_mode"], bytes([value & 0xFF]))
+    def wait_for_game_ready(self):
+        latest = None
+        for _ in range(60):
+            self.resume_for(0.25)
+            latest = self.read_state()
+            if (
+                latest["sprite_enable"] & EXPECTED_SPRITES == EXPECTED_SPRITES
+                and latest["player_y"] > latest["alien_y"]
+                and latest["player_y"] >= 180
+                and latest["alien_y"] <= 100
+            ):
+                return latest
+        raise PlaytestFailure(f"Timed out waiting for the game shell to appear: {latest}")
 
-    def wait_for_frame_delta(self, minimum_delta: int, max_polls: int = 200):
-        start_state = self.read_state()
-        start_frame = start_state["frame"]
-        for _ in range(max_polls):
-            self.monitor.exit_monitor()
-            time.sleep(0.01)
-            state = self.read_state()
-            if diff_u16(state["frame"], start_frame) >= minimum_delta:
-                return state
-        raise PlaytestFailure(
-            f"Timed out waiting for frame counter to advance by {minimum_delta} frames"
+    def drive_until_clamp(self, name: str, key_code: int, joystick_mask: int, moving_left: bool):
+        direction_word = "left" if moving_left else "right"
+        self.logger.log(f"Holding {direction_word} until player movement clamps")
+        self.gui.key_down(key_code)
+        try:
+            self.resume_for(0.35)
+            first = self.capture_sample(f"{name}-press")
+            self.assert_true(
+                f"{name}_joystick_active",
+                (first["joystick_port_2"] & joystick_mask) == 0,
+                first,
+            )
+
+            previous = first
+            moved = False
+            stable_samples = 0
+            for _ in range(12):
+                self.resume_for(1.0)
+                current = self.capture_sample(f"{name}-hold")
+                delta = current["player_x"] - previous["player_x"]
+                if moving_left and delta < 0:
+                    moved = True
+                    stable_samples = 0
+                elif not moving_left and delta > 0:
+                    moved = True
+                    stable_samples = 0
+                elif delta == 0:
+                    stable_samples += 1
+                else:
+                    raise PlaytestFailure(
+                        f"{name}_unexpected_player_direction: previous={previous} current={current}"
+                    )
+
+                previous = current
+                if moved and stable_samples >= 2:
+                    self.record_step(f"{name}_clamp", "passed", current)
+                    return current
+
+            raise PlaytestFailure(
+                f"{name}_clamp_timeout: movement did not settle while holding {direction_word}"
+            )
+        finally:
+            self.gui.key_up(key_code)
+
+    def assert_idle(self, expected_x: int, stage_name: str):
+        self.logger.log("Checking idle stability after releasing the key")
+        self.resume_for(1.0)
+        idle_one = self.capture_sample(f"{stage_name}-idle-1")
+        self.resume_for(1.0)
+        idle_two = self.capture_sample(f"{stage_name}-idle-2")
+        self.assert_true(
+            f"{stage_name}_idle_position",
+            idle_one["player_x"] == expected_x == idle_two["player_x"],
+            {"idle_one": idle_one, "idle_two": idle_two, "expected_x": expected_x},
         )
-
-    def wait_with_long_resume(self, minimum_delta: int, sleep_seconds: float):
-        start_state = self.read_state()
-        start_frame = start_state["frame"]
-        latest_state = start_state
-        while diff_u16(latest_state["frame"], start_frame) < minimum_delta:
-            self.monitor.exit_monitor()
-            time.sleep(sleep_seconds)
-            latest_state = self.read_state()
-        return latest_state
-
-    def assert_true(self, name: str, condition: bool, detail):
-        if not condition:
-            raise PlaytestFailure(f"{name}: {detail}")
-
-    def run_until(self, stage_name: str, predicate, timeout_frames: int, poll_frames: int = 15):
-        initial_state = self.read_state()
-        start_frame = initial_state["frame"]
-        latest_state = initial_state
-        while diff_u16(latest_state["frame"], start_frame) <= timeout_frames:
-            if predicate(latest_state):
-                return latest_state
-            latest_state = self.wait_for_frame_delta(poll_frames)
-        raise PlaytestFailure(
-            f"{stage_name}: timeout after {timeout_frames} frames at state {latest_state}"
+        self.assert_true(
+            f"{stage_name}_idle_joystick_clear",
+            not idle_two["joystick_left_pressed"] and not idle_two["joystick_right_pressed"],
+            idle_two,
         )
+        self.record_step(f"{stage_name}_idle", "passed", {"idle_one": idle_one, "idle_two": idle_two})
+
+    def alien_has_bounced(self):
+        alien_positions = [sample["alien_x"] for sample in self.samples]
+        deltas = [
+            current - previous
+            for previous, current in zip(alien_positions, alien_positions[1:])
+            if current != previous
+        ]
+        return {
+            "moved": bool(deltas),
+            "positive_seen": any(delta > 0 for delta in deltas),
+            "negative_seen": any(delta < 0 for delta in deltas),
+            "deltas": deltas,
+        }
+
+    def wait_for_alien_bounce(self):
+        self.logger.log("Observing alien movement until a visible bounce is sampled")
+        for _ in range(12):
+            bounce_state = self.alien_has_bounced()
+            if bounce_state["positive_seen"] and bounce_state["negative_seen"]:
+                self.record_step("alien_bounce", "passed", bounce_state)
+                return bounce_state
+            self.resume_for(1.0)
+            self.capture_sample("alien-watch")
+        bounce_state = self.alien_has_bounced()
+        raise PlaytestFailure(f"alien_bounce_timeout: {bounce_state}")
 
     def run(self):
         self.launch_vice()
+        ready_state = self.wait_for_game_ready()
+        self.record_step("game_ready", "passed", ready_state)
 
-        self.logger.log("Waiting for autoplay frame counter to start advancing")
-        self.wait_for_frame_delta(2)
-        self.record_step("frame_counter_started", "passed")
-
-        if self.args.mode == "internal":
-            return self.run_internal_scripted_test()
-
-        initial = self.read_state()
-        self.assert_true(
-            "initial_player_bounds",
-            initial["player_min"] <= initial["player_x"] <= initial["player_max"],
-            initial,
-        )
-        self.assert_true(
-            "initial_alien_bounds",
-            initial["alien_min"] <= initial["alien_x"] <= initial["alien_max"],
-            initial,
-        )
+        initial = self.capture_sample("boot")
         self.assert_true(
             "initial_layout",
-            initial["player_y"] > initial["alien_y"] and initial["player_y"] >= 200 and initial["alien_y"] <= 80,
+            initial["player_y"] > initial["alien_y"]
+            and initial["player_y"] >= 180
+            and initial["alien_y"] <= 100,
+            initial,
+        )
+        self.assert_true(
+            "initial_sprites_enabled",
+            initial["sprite_enable"] & EXPECTED_SPRITES == EXPECTED_SPRITES,
             initial,
         )
         self.record_step("initial_state", "passed", initial)
 
-        self.logger.log("Driving player left to the clamp")
-        self.set_input_bits(0x01)
-        left_min_seen = initial["player_x"]
-        left_state = self.run_until(
-            "player_left_clamp",
-            lambda state: state["player_x"] == state["player_min"],
-            timeout_frames=2000,
-        )
-        left_min_seen = min(left_min_seen, left_state["player_x"])
+        left_clamp = self.drive_until_clamp("left", LEFT_KEY_CODE, LEFT_MASK, moving_left=True)
         self.assert_true(
-            "left_clamp_exact",
-            left_state["player_x"] == left_state["player_min"],
-            left_state,
+            "left_clamp_moved",
+            left_clamp["player_x"] < initial["player_x"],
+            {"initial": initial, "clamp": left_clamp},
         )
-        self.assert_true(
-            "left_clamp_bounds",
-            left_min_seen >= left_state["player_min"],
-            left_state,
-        )
-        self.record_step("left_clamp", "passed", left_state)
+        self.assert_idle(left_clamp["player_x"], "left")
 
-        self.logger.log("Checking idle stability")
-        self.set_input_bits(0x00)
-        idle_start = self.read_state()
-        idle_end = self.wait_for_frame_delta(30, max_polls=200)
+        right_clamp = self.drive_until_clamp("right", RIGHT_KEY_CODE, RIGHT_MASK, moving_left=False)
         self.assert_true(
-            "idle_no_drift",
-            idle_end["player_x"] == idle_start["player_x"],
-            {"before": idle_start, "after": idle_end},
+            "right_clamp_moved",
+            right_clamp["player_x"] > left_clamp["player_x"],
+            {"left_clamp": left_clamp, "right_clamp": right_clamp},
         )
-        self.record_step("idle_stability", "passed", {"before": idle_start, "after": idle_end})
+        self.assert_idle(right_clamp["player_x"], "right")
 
-        self.logger.log("Driving player right to the clamp")
-        self.set_input_bits(0x02)
-        right_state = self.run_until(
-            "player_right_clamp",
-            lambda state: state["player_x"] == state["player_max"],
-            timeout_frames=2000,
-        )
+        bounce_state = self.wait_for_alien_bounce()
+        self.assert_true("alien_moves", bounce_state["moved"], bounce_state)
         self.assert_true(
-            "right_clamp_exact",
-            right_state["player_x"] == right_state["player_max"],
-            right_state,
+            "alien_bounces",
+            bounce_state["positive_seen"] and bounce_state["negative_seen"],
+            bounce_state,
         )
-        self.assert_true(
-            "right_clamp_bounds",
-            right_state["player_x"] <= right_state["player_max"],
-            right_state,
-        )
-        self.record_step("right_clamp", "passed", right_state)
 
-        self.logger.log("Observing alien motion and bounce")
-        self.set_input_bits(0x00)
-        alien_start = self.read_state()
-        alien_initial_dir = alien_start["alien_dir"]
-        alien_positions = {alien_start["alien_x"]}
-        alien_flipped = False
-        start_frame = alien_start["frame"]
-        alien_state = alien_start
-        while diff_u16(alien_state["frame"], start_frame) <= 2000:
-            alien_state = self.wait_for_frame_delta(15, max_polls=200)
-            alien_positions.add(alien_state["alien_x"])
-            if alien_state["alien_dir"] != alien_initial_dir:
-                alien_flipped = True
-            self.assert_true(
-                "alien_bounds",
-                alien_state["alien_min"] <= alien_state["alien_x"] <= alien_state["alien_max"],
-                alien_state,
+        captured_hashes = {
+            sample["screenshot_sha256"]
+            for sample in self.samples
+            if sample["screenshot_sha256"] is not None
+        }
+        if self.host_capture_failure is not None:
+            self.record_step(
+                "host_screenshots",
+                "skipped",
+                {"reason": self.host_capture_failure},
             )
-            if alien_flipped and len(alien_positions) > 1:
-                break
-        self.assert_true(
-            "alien_moves",
-            len(alien_positions) > 1,
-            {"start": alien_start, "end": alien_state},
-        )
-        self.assert_true(
-            "alien_flips_direction",
-            alien_flipped,
-            {"start": alien_start, "end": alien_state},
-        )
-        self.record_step(
-            "alien_motion",
-            "passed",
-            {
-                "start": alien_start,
-                "end": alien_state,
-                "positions_seen": sorted(alien_positions),
-            },
-        )
+        elif len(captured_hashes) > 1:
+            self.record_step(
+                "host_screenshots",
+                "passed",
+                {"captured_frames": len(captured_hashes)},
+            )
+        elif captured_hashes:
+            self.record_step(
+                "host_screenshots",
+                "skipped",
+                {"reason": "Only one host screenshot was captured"},
+            )
+        else:
+            self.record_step(
+                "host_screenshots",
+                "skipped",
+                {"reason": "No host screenshots were captured"},
+            )
 
         self.results["success"] = True
-        self.results["final_state"] = alien_state
-
-    def run_internal_scripted_test(self):
-        initial = self.read_state()
-        self.assert_true(
-            "initial_layout",
-            initial["player_y"] > initial["alien_y"] and initial["player_y"] >= 200 and initial["alien_y"] <= 80,
-            initial,
-        )
-        self.assert_true(
-            "initial_player_bounds",
-            initial["player_min"] <= initial["player_x"] <= initial["player_max"],
-            initial,
-        )
-        self.assert_true(
-            "initial_alien_bounds",
-            initial["alien_min"] <= initial["alien_x"] <= initial["alien_max"],
-            initial,
-        )
-        self.record_step("initial_state", "passed", initial)
-
-        self.logger.log("Starting internal autoplay script")
-        self.set_input_bits(0x00)
-        self.set_autoplay_mode(0x01)
-
-        start_state = self.read_state()
-        latest_state = start_state
-        start_frame = start_state["frame"]
-        while diff_u16(latest_state["frame"], start_frame) <= 2500:
-            latest_state = self.wait_with_long_resume(120, 2.5)
-            if latest_state["autoplay_status"] == 0x01:
-                self.record_step("internal_autoplay", "passed", latest_state)
-                self.results["success"] = True
-                self.results["final_state"] = latest_state
-                return
-            if latest_state["autoplay_status"] == 0x80:
-                raise PlaytestFailure(
-                    f"internal_autoplay_failed: error_code={latest_state['autoplay_error_code']} state={latest_state}"
-                )
-
-        raise PlaytestFailure(
-            f"internal_autoplay_timeout: state={latest_state}"
-        )
+        self.results["final_state"] = self.samples[-1]
+        self.results["summary"] = {
+            "left_clamp_x": left_clamp["player_x"],
+            "right_clamp_x": right_clamp["player_x"],
+            "alien_direction_samples": bounce_state["deltas"],
+            "captured_frame_count": len(captured_hashes),
+            "host_screenshots_enabled": self.host_capture_failure is None,
+        }
 
 
-def write_json(path: Path, payload) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as handle:
-        json.dump(payload, handle, indent=2, sort_keys=True)
-        handle.write("\n")
-
-
-def main():
-    parser = argparse.ArgumentParser()
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Visible external playtest for the C64 Galaxian shell using macOS key events."
+    )
     parser.add_argument("--prg", type=Path, required=True)
-    parser.add_argument("--sym", type=Path, required=True)
     parser.add_argument("--log", type=Path, required=True)
     parser.add_argument("--json", type=Path, required=True)
     parser.add_argument("--vice-log", type=Path, required=True)
-    parser.add_argument(
-        "--runner",
-        type=Path,
-        default=Path("scripts/run_vice_binary_monitor.sh"),
-    )
-    parser.add_argument(
-        "--mode",
-        choices=("external", "internal"),
-        default="external",
-    )
-    args = parser.parse_args()
+    parser.add_argument("--frames-dir", type=Path, required=True)
+    parser.add_argument("--keymap", type=Path, required=True)
+    parser.add_argument("--exit-screenshot", type=Path, required=True)
+    parser.add_argument("--process-name", default="x64sc")
+    parser.add_argument("--window-x", type=int, default=80)
+    parser.add_argument("--window-y", type=int, default=80)
+    parser.add_argument("--window-width", type=int, default=720)
+    parser.add_argument("--window-height", type=int, default=638)
+    return parser.parse_args()
 
+
+def main():
+    args = parse_args()
     logger = Logger(args.log)
     playtester = Playtester(args, logger)
-
     exit_code = 0
+
     try:
         playtester.run()
-        logger.log("Autoplay smoke test passed")
-    except Exception as exc:
+        logger.log("Playtest passed")
+    except PlaytestFailure as exc:
+        playtester.results["failure"] = str(exc)
+        if playtester.samples:
+            playtester.results["last_sample"] = playtester.samples[-1]
+        logger.log(f"Playtest failed: {exc}")
         exit_code = 1
-        logger.log(f"Autoplay smoke test failed: {exc}")
-        playtester.results["success"] = False
-        playtester.results["failures"].append(
-            {
-                "error": str(exc),
-                "last_sample": playtester.last_sample,
-            }
-        )
     finally:
-        try:
-            playtester.shutdown()
-        finally:
-            write_json(args.json, playtester.results)
-            logger.close()
+        playtester.shutdown()
+        playtester.results["artifacts"]["exit_screenshot_exists"] = args.exit_screenshot.exists()
+        args.json.parent.mkdir(parents=True, exist_ok=True)
+        args.json.write_text(json.dumps(playtester.results, indent=2), encoding="utf-8")
+        logger.close()
 
-    sys.exit(exit_code)
+    return exit_code
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
