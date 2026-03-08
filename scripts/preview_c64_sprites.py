@@ -108,7 +108,8 @@ def parse_asm_sprites(text: str, allowed_labels: Optional[set[str]]) -> list[tup
         label_match = LABEL_RE.match(line)
         if label_match:
             flush()
-            current_label = label_match.group(1)
+            next_label = label_match.group(1)
+            current_label = next_label if allowed_labels is None or next_label in allowed_labels else None
             continue
 
         byte_match = BYTE_RE.search(line)

@@ -44,14 +44,20 @@ playtest-asm-visible:
 debug-sprites:
 	python3 scripts/generate_arcade_enemy_sprites.py
 	python3 scripts/generate_arcade_full_sheet_assets.py
+	python3 scripts/generate_player_sprite.py
 	python3 scripts/debug_sprite_frames.py --grouped
+	python3 scripts/debug_sprite_frames.py src/generated_player_sprite.asm --labels player_sprite_png --mode singlecolor
+	python3 scripts/debug_sprite_frames.py src/generated_player_sprite.asm --labels player_overlay_sprite_png --mode multicolor
 	python3 scripts/preview_c64_sprites.py
+	python3 scripts/preview_player_sprite.py
 
 preview-sprites:
 	python3 scripts/generate_arcade_enemy_sprites.py
 	python3 scripts/generate_arcade_full_sheet_assets.py
+	python3 scripts/generate_player_sprite.py
 	python3 scripts/preview_c64_sprites.py
 	python3 scripts/preview_c64_sprites.py src/generated_arcade_sprites.bin --out artifacts/arcade-sprites-preview.svg
+	python3 scripts/preview_player_sprite.py
 
 convert-sprites-png2prg:
 	bash scripts/convert_enemy_sprites_with_png2prg.sh

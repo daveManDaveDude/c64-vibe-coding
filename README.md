@@ -129,6 +129,7 @@ make clean
 
 The sprite pipeline now uses `ArcadeGalaxianSprites.png` as the source of truth.
 The first `3x3` sprites on that full sheet are extracted into the in-game enemy bank, and the whole sheet is also exported as a separate asset bank.
+The end-to-end process is documented in [`docs/arcade-sprite-pipeline.md`](/Users/david/Documents/c64/c64-vibe-coding/docs/arcade-sprite-pipeline.md).
 
 The enemy subset generation produces:
 

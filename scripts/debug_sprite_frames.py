@@ -75,7 +75,7 @@ def load_source(path: Path, seen: Optional[set[Path]] = None) -> str:
     return "\n".join(output)
 
 
-def render_sprite(sprite_bytes: list[int]) -> list[str]:
+def render_singlecolor_sprite(sprite_bytes: list[int]) -> list[str]:
     data = sprite_bytes[:63]
     rows: list[str] = []
     for row_start in range(0, min(len(data), 63), 3):
@@ -87,8 +87,40 @@ def render_sprite(sprite_bytes: list[int]) -> list[str]:
     return rows
 
 
-def print_grouped_sprites(group_name: str, labels: list[str], sprites: dict[str, list[int]]) -> None:
-    rendered = [render_sprite(sprites[label]) for label in labels]
+def render_multicolor_sprite(sprite_bytes: list[int]) -> list[str]:
+    data = sprite_bytes[:63]
+    rows: list[str] = []
+    glyphs = {
+        0: "..",
+        1: "11",
+        2: "22",
+        3: "33",
+    }
+    for row_start in range(0, min(len(data), 63), 3):
+        row_bytes = data[row_start : row_start + 3]
+        if len(row_bytes) < 3:
+            break
+        value = (row_bytes[0] << 16) | (row_bytes[1] << 8) | row_bytes[2]
+        cells = []
+        for shift in range(22, -2, -2):
+            cells.append(glyphs[(value >> shift) & 0b11])
+        rows.append("".join(cells))
+    return rows
+
+
+def render_sprite(sprite_bytes: list[int], mode: str) -> list[str]:
+    if mode == "multicolor":
+        return render_multicolor_sprite(sprite_bytes)
+    return render_singlecolor_sprite(sprite_bytes)
+
+
+def print_grouped_sprites(
+    group_name: str,
+    labels: list[str],
+    sprites: dict[str, list[int]],
+    mode: str,
+) -> None:
+    rendered = [render_sprite(sprites[label], mode) for label in labels]
     width = max(len(label) for label in labels)
 
     print(group_name)
@@ -127,6 +159,12 @@ def main() -> int:
         action="store_true",
         help="Print related animation frames side by side",
     )
+    parser.add_argument(
+        "--mode",
+        choices=("singlecolor", "multicolor"),
+        default="singlecolor",
+        help="How to decode the sprite bytes",
+    )
     args = parser.parse_args()
 
     asm_path = Path(args.asm_file)
@@ -149,7 +187,7 @@ def main() -> int:
                 continue
             if printed:
                 print()
-            print_grouped_sprites(group_name, labels, sprites)
+            print_grouped_sprites(group_name, labels, sprites, args.mode)
             printed = True
         return 0
 
@@ -158,7 +196,7 @@ def main() -> int:
             print()
         print(label)
         print("-" * len(label))
-        for row in render_sprite(sprites[label]):
+        for row in render_sprite(sprites[label], args.mode):
             print(row)
 
     return 0

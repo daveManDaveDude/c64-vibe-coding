@@ -502,6 +502,9 @@ class Playtester:
         alive_data = None
         if "formation_slot0_alive" in self.symbols:
             alive_data = self.monitor.mem_get(self.symbols["formation_slot0_alive"], INITIAL_FORMATION_ALIVE_COUNT)
+        shot_active = None
+        if "shot_active" in self.symbols:
+            shot_active = self.monitor.mem_get(self.symbols["shot_active"], 1)[0] != 0
 
         def vic(offset: int) -> int:
             return vic_data[offset - SPRITE0_X]
@@ -523,7 +526,7 @@ class Playtester:
             "sprite_enable": sprite_enable,
             "sprite_x_msb": msb,
             "player_enabled": (sprite_enable & 0x02) != 0,
-            "shot_enabled": (sprite_enable & SHOT_SPRITE_MASK) != 0,
+            "shot_enabled": shot_active if shot_active is not None else (sprite_enable & SHOT_SPRITE_MASK) != 0,
             "formation_0_enabled": (sprite_enable & 0x01) != 0,
             "formation_1_enabled": (sprite_enable & 0x08) != 0,
             "formation_2_enabled": (sprite_enable & 0x10) != 0,

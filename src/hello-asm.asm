@@ -75,7 +75,7 @@ BasicUpstart2(start)
 .label FORMATION_SLOT3_OFFSET = 36
 .label FORMATION_SLOT4_OFFSET = 0
 .label FORMATION_SLOT5_OFFSET = 36
-.label ARCADE_SPRITE_PTR_BASE = $87
+.label ARCADE_SPRITE_PTR_BASE = $89
 .label FLAGSHIP_SPRITE0_PTR = ARCADE_SPRITE_PTR_BASE + 0
 .label FLAGSHIP_SPRITE1_PTR = ARCADE_SPRITE_PTR_BASE + 1
 .label FLAGSHIP_SPRITE2_PTR = ARCADE_SPRITE_PTR_BASE + 2
@@ -94,6 +94,7 @@ BasicUpstart2(start)
 .label FORMATION_SPRITE_MASK = %11111001
 .label FORMATION_MSB_CLEAR_MASK = %00000110
 .label PLAYER_COLOR = $0f
+.label PLAYER_OVERLAY_COLOR = $03
 .label PLAYER_START_X_LO = $a8
 .label PLAYER_START_X_HI = $00
 .label PLAYER_Y = 220
@@ -104,9 +105,10 @@ BasicUpstart2(start)
 .label PLAYER_MIN_X_HI = $00
 .label PLAYER_MAX_X_LO = $40
 .label PLAYER_MAX_X_HI = $01
-.label PLAYER_SPRITE_PTR = $c8
+.label PLAYER_OVERLAY_SPRITE_PTR = $c9
+.label PLAYER_SPRITE_PTR = $ca
 .label SHOT_COLOR = $01
-.label SHOT_SPRITE_PTR = $c9
+.label SHOT_SPRITE_PTR = $cb
 .label SHOT_START_Y = PLAYER_Y - 12
 .label SHOT_SPEED = 10
 .label SHOT_MIN_Y = 16
@@ -147,9 +149,9 @@ BasicUpstart2(start)
 .label ENEMY_BULLET_MAX_Y = 248
 .label ENEMY_EXPLOSION_COLOR = $07
 .label ENEMY_EXPLOSION_FRAME_TICKS = 4
-.label ENEMY_EXPLOSION_SPRITE0_PTR = $d3
-.label ENEMY_EXPLOSION_SPRITE1_PTR = $d4
-.label ENEMY_EXPLOSION_SPRITE2_PTR = $d5
+.label ENEMY_EXPLOSION_SPRITE0_PTR = $d5
+.label ENEMY_EXPLOSION_SPRITE1_PTR = $d6
+.label ENEMY_EXPLOSION_SPRITE2_PTR = $d7
 .label PLAYER_RESPAWN_DELAY = 40
 .label PLAYER_HIT_MAX_Y = PLAYER_Y + 21
 .label PLAYER_HIT_RIGHT_OFFSET = 23
@@ -360,6 +362,10 @@ init_player:
   lda #PLAYER_COLOR
   sta SPRITE1_COLOR
 
+  lda SPRITE_MULTICOLOR
+  and #%11111101
+  sta SPRITE_MULTICOLOR
+
   lda SPRITE_ENABLE
   ora #%00000010
   sta SPRITE_ENABLE
@@ -392,6 +398,42 @@ init_shot:
   lda SPRITE_ENABLE
   and #%11111011
   sta SPRITE_ENABLE
+
+  lda SPRITE_X_MSB
+  and #%11111011
+  sta SPRITE_X_MSB
+  jsr show_player_overlay
+  rts
+
+show_player_overlay:
+  lda player_respawn_timer
+  bne hide_player_overlay
+
+  lda #PLAYER_OVERLAY_SPRITE_PTR
+  sta SPRITE_POINTERS + 2
+  lda #PLAYER_OVERLAY_COLOR
+  sta SPRITE2_COLOR
+  lda #PLAYER_Y
+  sta SPRITE2_Y
+  jsr store_player_overlay_x
+
+  lda SPRITE_MULTICOLOR
+  ora #%00000100
+  sta SPRITE_MULTICOLOR
+
+  lda SPRITE_ENABLE
+  ora #%00000100
+  sta SPRITE_ENABLE
+  rts
+
+hide_player_overlay:
+  lda SPRITE_ENABLE
+  and #%11111011
+  sta SPRITE_ENABLE
+
+  lda SPRITE_MULTICOLOR
+  and #%11111011
+  sta SPRITE_MULTICOLOR
 
   lda SPRITE_X_MSB
   and #%11111011
@@ -1498,6 +1540,8 @@ handle_player_hit:
   and #%11111101
   sta SPRITE_ENABLE
 
+  jsr hide_player_overlay
+
   jsr start_hit_flash
 handle_player_hit_done:
   rts
@@ -1512,6 +1556,8 @@ respawn_player:
   lda SPRITE_ENABLE
   ora #%00000010
   sta SPRITE_ENABLE
+
+  jsr show_player_overlay
 
   lda #ENEMY_BULLET_FIRE_COOLDOWN
   sta enemy_fire_cooldown
@@ -1866,6 +1912,14 @@ target_miss:
   rts
 
 spawn_player_shot:
+  lda #SHOT_SPRITE_PTR
+  sta SPRITE_POINTERS + 2
+  lda #SHOT_COLOR
+  sta SPRITE2_COLOR
+  lda SPRITE_MULTICOLOR
+  and #%11111011
+  sta SPRITE_MULTICOLOR
+
   lda player_x_lo
   sta shot_x_lo
   lda player_x_hi
@@ -1889,13 +1943,13 @@ deactivate_shot:
   sta shot_active
   sta shot_y
 
-  lda SPRITE_ENABLE
-  and #%11111011
-  sta SPRITE_ENABLE
+  lda player_respawn_timer
+  bne deactivate_shot_hide_overlay
+  jsr show_player_overlay
+  rts
 
-  lda SPRITE_X_MSB
-  and #%11111011
-  sta SPRITE_X_MSB
+deactivate_shot_hide_overlay:
+  jsr hide_player_overlay
   rts
 
 update_enemy_hit_animations:
@@ -2389,6 +2443,24 @@ store_player_x:
   ora #%00000010
 player_store_x_done:
   sta SPRITE_X_MSB
+  lda shot_active
+  bne store_player_x_exit
+  lda player_respawn_timer
+  bne store_player_x_exit
+  jsr store_player_overlay_x
+store_player_x_exit:
+  rts
+
+store_player_overlay_x:
+  lda player_x_lo
+  sta SPRITE2_X
+  lda SPRITE_X_MSB
+  and #%11111011
+  ldx player_x_hi
+  beq player_overlay_store_x_done
+  ora #%00000100
+player_overlay_store_x_done:
+  sta SPRITE_X_MSB
   rts
 
 store_shot_x:
@@ -2608,37 +2680,21 @@ color_row_hi:
     .byte >(COLOR_RAM + (row * 40))
   }
 
-* = $21c0 "Arcade Sprites"
+* = $2240 "Arcade Sprites"
 
 .import binary "generated_arcade_sprites.bin"
 
-* = $3200 "Player Sprite"
+* = $3240 "Player Overlay Sprite"
+
+player_overlay_sprite:
+  .import binary "generated_player_overlay.bin"
+
+* = $3280 "Player Sprite"
 
 player_sprite:
-  .byte $01,$c0,$00
-  .byte $03,$e0,$00
-  .byte $07,$f0,$00
-  .byte $07,$f0,$00
-  .byte $04,$90,$00
-  .byte $11,$c4,$00
-  .byte $11,$c4,$00
-  .byte $39,$ce,$00
-  .byte $3b,$ee,$00
-  .byte $3f,$fe,$00
-  .byte $3f,$fe,$00
-  .byte $3d,$de,$00
-  .byte $39,$4e,$00
-  .byte $39,$4e,$00
-  .byte $38,$0e,$00
-  .byte $10,$04,$00
-  .byte $00,$00,$00
-  .byte $00,$00,$00
-  .byte $00,$00,$00
-  .byte $00,$00,$00
-  .byte $00,$00,$00
-  .byte $00
+  .import binary "generated_player_sprite.bin"
 
-* = $3240 "Shot Sprite"
+* = $32c0 "Shot Sprite"
 
 shot_sprite:
   .byte $00,$18,$00
@@ -2664,7 +2720,7 @@ shot_sprite:
   .byte $00,$00,$00
   .byte $00
 
-* = $3280 "Enemy Bullet Charset Data"
+* = $3300 "Enemy Bullet Charset Data"
 
 enemy_bullet_charset:
   .for (var sy = 0; sy < 8; sy++) {
@@ -2695,7 +2751,7 @@ enemy_bullet_charset:
   .byte $00,$00,$00
   .byte $00
 
-* = $34c0 "Enemy Explosion Sprite 0"
+* = $3540 "Enemy Explosion Sprite 0"
 
 enemy_explosion_sprite0:
   .byte $00,$00,$00
@@ -2721,7 +2777,7 @@ enemy_explosion_sprite0:
   .byte $00,$00,$00
   .byte $00
 
-* = $3500 "Enemy Explosion Sprite 1"
+* = $3580 "Enemy Explosion Sprite 1"
 
 enemy_explosion_sprite1:
   .byte $00,$00,$00
@@ -2747,7 +2803,7 @@ enemy_explosion_sprite1:
   .byte $00,$00,$00
   .byte $00
 
-* = $3540 "Enemy Explosion Sprite 2"
+* = $35c0 "Enemy Explosion Sprite 2"
 
 enemy_explosion_sprite2:
   .byte $90,$50,$00
