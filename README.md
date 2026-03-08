@@ -119,8 +119,8 @@ make clean
 - `make run-asm-live`: assembly live alias
 - `make run-asm-timed`: assembly timed mode
 - `make verify-asm`: assembly console verification for sandbox/headless use
-- `make playtest-asm`: binary-monitor autoplay smoke test
-- `make playtest-asm-visible`: binary-monitor autoplay smoke test with visible VICE window
+- `make playtest-asm`: faster binary-monitor autoplay smoke test without per-sample host screenshots
+- `make playtest-asm-visible`: binary-monitor autoplay smoke test with visible VICE window and per-sample host screenshots
 
 ## Assembly Stage 2 Shell
 

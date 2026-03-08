@@ -21,4 +21,5 @@ python3 scripts/playtest_asm.py \
   --vice-log "$VICELOG" \
   --frames-dir "$FRAMESDIR" \
   --keymap "$KEYMAPFILE" \
-  --exit-screenshot "$EXITSCREENSHOT"
+  --exit-screenshot "$EXITSCREENSHOT" \
+  --capture-host-screenshots

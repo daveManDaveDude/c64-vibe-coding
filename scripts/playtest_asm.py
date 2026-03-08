@@ -270,7 +270,6 @@ class MacOSGui:
         self._run_osascript(lines)
 
     def key_down(self, key_code: int) -> None:
-        self.activate()
         self._send_key_event(key_code, True)
 
     def key_up(self, key_code: int) -> None:
@@ -331,7 +330,7 @@ class Playtester:
         self.vice_process = None
         self.sample_counter = 0
         self.samples = []
-        self.host_capture_enabled = True
+        self.host_capture_enabled = args.capture_host_screenshots
         self.host_capture_failure = None
         self.results = {
             "mode": "external_gui_keyboard",
@@ -345,6 +344,7 @@ class Playtester:
                 "capture_region": capture_region,
                 "exit_screenshot": str(args.exit_screenshot),
                 "keyboard_backend": self.gui.keyboard_backend,
+                "capture_host_screenshots": args.capture_host_screenshots,
             },
             "steps": [],
             "samples": self.samples,
@@ -476,9 +476,9 @@ class Playtester:
         self.monitor.exit_monitor()
         time.sleep(seconds)
 
-    def read_state(self):
+    def read_state(self, include_joystick: bool = True):
         vic_data = self.monitor.mem_get(SPRITE0_X, (SPRITE_ENABLE - SPRITE0_X) + 1)
-        joystick_value = self.monitor.mem_get(JOYSTICK_PORT_2, 1)[0]
+        joystick_value = self.monitor.mem_get(JOYSTICK_PORT_2, 1)[0] if include_joystick else None
 
         def vic(offset: int) -> int:
             return vic_data[offset - SPRITE0_X]
@@ -508,15 +508,14 @@ class Playtester:
             "formation_4_enabled": (sprite_enable & 0x40) != 0,
             "formation_5_enabled": (sprite_enable & 0x80) != 0,
             "joystick_port_2": joystick_value,
-            "joystick_left_pressed": (joystick_value & LEFT_MASK) == 0,
-            "joystick_right_pressed": (joystick_value & RIGHT_MASK) == 0,
-            "joystick_fire_pressed": (joystick_value & FIRE_MASK) == 0,
+            "joystick_left_pressed": (joystick_value & LEFT_MASK) == 0 if include_joystick else False,
+            "joystick_right_pressed": (joystick_value & RIGHT_MASK) == 0 if include_joystick else False,
+            "joystick_fire_pressed": (joystick_value & FIRE_MASK) == 0 if include_joystick else False,
         }
         return state
 
-    def capture_sample(self, stage: str):
-        state = self.read_state()
-        screenshot_path = self.args.frames_dir / f"{self.sample_counter:03d}-{stage}.png"
+    def capture_sample(self, stage: str, include_joystick: bool = True):
+        state = self.read_state(include_joystick=include_joystick)
         sample = {
             "index": self.sample_counter,
             "stage": stage,
@@ -526,6 +525,7 @@ class Playtester:
             "screenshot_sha256": None,
         }
         if self.host_capture_enabled:
+            screenshot_path = self.args.frames_dir / f"{self.sample_counter:03d}-{stage}.png"
             try:
                 screenshot_hash = self.gui.capture_window(screenshot_path)
             except PlaytestFailure as exc:
@@ -545,7 +545,7 @@ class Playtester:
         latest = None
         for _ in range(60):
             self.resume_for(0.25)
-            latest = self.read_state()
+            latest = self.read_state(include_joystick=False)
             if (
                 latest["sprite_enable"] & INITIAL_EXPECTED_SPRITES == INITIAL_EXPECTED_SPRITES
                 and latest["player_y"] > latest["formation_y"]
@@ -690,28 +690,43 @@ class Playtester:
                 self.record_step("formation_bounce", "passed", bounce_state)
                 return bounce_state
             self.resume_for(1.0)
-            self.capture_sample("formation-watch")
+            self.capture_sample("formation-watch", include_joystick=False)
         bounce_state = self.formation_has_bounced()
         raise PlaytestFailure(f"formation_bounce_timeout: {bounce_state}")
 
-    def choose_target_slot(self, sample, preferred_index: int = 4):
+    def choose_target_slot(self, sample, preferred_index: int = 5):
         live_slots = self.live_formation_slots(sample)
         if not live_slots:
             raise PlaytestFailure(f"no_live_formation_slots: {sample}")
         for slot in live_slots:
             if slot["index"] == preferred_index:
                 return preferred_index
-        return live_slots[len(live_slots) // 2]["index"]
+        return min(live_slots, key=lambda slot: abs(slot["x"] - sample["player_x"]))["index"]
 
-    def align_player_with_formation_slot(self, preferred_index: int = 4):
-        self.logger.log("Aligning the player ship under a live formation slot before firing")
+    def wait_for_formation_slot_alignment(self, preferred_index: int = 5):
+        self.logger.log("Waiting for a live formation slot to drift into the player's firing lane")
         last_detail = None
-        for _ in range(40):
-            current = self.capture_sample("align-check")
+        for _ in range(16):
+            current = self.capture_sample("align-check", include_joystick=False)
             target_slot = self.choose_target_slot(current, preferred_index=preferred_index)
             target_x = current[f"formation_{target_slot}_x"]
             delta = current["player_x"] - target_x
-            last_detail = {"slot": target_slot, "sample": current}
+            last_detail = {"slot": target_slot, "sample": current, "mode": "passive"}
+            if abs(delta) <= 24:
+                return last_detail
+            self.resume_for(1.0)
+
+        raise PlaytestFailure(f"passive_player_alignment_timeout: {last_detail}")
+
+    def align_player_with_formation_slot(self, preferred_index: int = 5):
+        self.logger.log("Aligning the player ship under a live formation slot before firing")
+        last_detail = None
+        for _ in range(40):
+            current = self.capture_sample("align-check", include_joystick=False)
+            target_slot = self.choose_target_slot(current, preferred_index=preferred_index)
+            target_x = current[f"formation_{target_slot}_x"]
+            delta = current["player_x"] - target_x
+            last_detail = {"slot": target_slot, "sample": current, "mode": "active"}
             if abs(delta) <= 10:
                 self.record_step("player_aligned", "passed", last_detail)
                 return last_detail
@@ -737,7 +752,7 @@ class Playtester:
                 pressed,
             )
             self.resume_for(0.12)
-            launched = self.capture_sample(f"fire-{attempt}-launch")
+            launched = self.capture_sample(f"fire-{attempt}-launch", include_joystick=False)
             self.assert_true(
                 f"fire_{attempt}_shot_spawned",
                 launched["shot_enabled"]
@@ -752,7 +767,17 @@ class Playtester:
         attempts = []
         initial_alive_count = INITIAL_FORMATION_ALIVE_COUNT
         for attempt in range(1, 5):
-            alignment = self.align_player_with_formation_slot(preferred_index=4)
+            try:
+                alignment = self.wait_for_formation_slot_alignment(preferred_index=5)
+            except PlaytestFailure as exc:
+                self.logger.log(f"Passive alignment timed out, falling back to movement: {exc}")
+                alignment = self.align_player_with_formation_slot(preferred_index=5)
+            else:
+                target_x = alignment["sample"][f"formation_{alignment['slot']}_x"]
+                if abs(alignment["sample"]["player_x"] - target_x) > 10:
+                    alignment = self.align_player_with_formation_slot(preferred_index=alignment["slot"])
+                else:
+                    self.record_step("player_aligned", "passed", alignment)
             launch = self.fire_once(attempt)
             attempt_detail = {
                 "attempt": attempt,
@@ -765,7 +790,7 @@ class Playtester:
             watch_sample = launch
             for _ in range(16):
                 self.resume_for(0.2)
-                watch_sample = self.capture_sample(f"fire-{attempt}-watch")
+                watch_sample = self.capture_sample(f"fire-{attempt}-watch", include_joystick=False)
                 attempt_detail["shot_seen"] = attempt_detail["shot_seen"] or watch_sample["shot_enabled"]
                 if self.formation_alive_count(watch_sample) == initial_alive_count - 1:
                     attempt_detail["result"] = "hit"
@@ -791,7 +816,7 @@ class Playtester:
     def verify_gap_persists(self, destroyed_slots, hit_sample):
         self.logger.log("Checking that the destroyed slot remains a visible gap while the formation keeps moving")
         self.resume_for(0.8)
-        follow_up = self.capture_sample("gap-check")
+        follow_up = self.capture_sample("gap-check", include_joystick=False)
         self.assert_true(
             "gap_alive_count",
             self.formation_alive_count(follow_up) == INITIAL_FORMATION_ALIVE_COUNT - 1,
@@ -909,7 +934,7 @@ class Playtester:
             "destroyed_slots": hit_state["destroyed_slots"],
             "alive_slots_after_hit": self.formation_alive_count(gap_state),
             "captured_frame_count": len(captured_hashes),
-            "host_screenshots_enabled": self.host_capture_failure is None,
+            "host_screenshots_enabled": self.args.capture_host_screenshots,
         }
 
 
@@ -929,6 +954,7 @@ def parse_args():
     parser.add_argument("--window-y", type=int, default=80)
     parser.add_argument("--window-width", type=int, default=720)
     parser.add_argument("--window-height", type=int, default=638)
+    parser.add_argument("--capture-host-screenshots", action="store_true")
     return parser.parse_args()
 
 
