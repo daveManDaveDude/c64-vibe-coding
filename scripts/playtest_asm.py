@@ -32,6 +32,12 @@ SPRITE3_X = 0xD006
 SPRITE3_Y = 0xD007
 SPRITE4_X = 0xD008
 SPRITE4_Y = 0xD009
+SPRITE5_X = 0xD00A
+SPRITE5_Y = 0xD00B
+SPRITE6_X = 0xD00C
+SPRITE6_Y = 0xD00D
+SPRITE7_X = 0xD00E
+SPRITE7_Y = 0xD00F
 SPRITE_X_MSB = 0xD010
 SPRITE_ENABLE = 0xD015
 JOYSTICK_PORT_2 = 0xDC00
@@ -42,10 +48,11 @@ FIRE_KEY_CODE = 49
 LEFT_MASK = 0x04
 RIGHT_MASK = 0x08
 FIRE_MASK = 0x10
-FORMATION_SPRITES_MASK = 0x19
+FORMATION_SPRITES_MASK = 0xF9
 PLAYER_SPRITE_MASK = 0x02
 INITIAL_EXPECTED_SPRITES = FORMATION_SPRITES_MASK | PLAYER_SPRITE_MASK
 SHOT_SPRITE_MASK = 0x04
+INITIAL_FORMATION_ALIVE_COUNT = 6
 
 
 class PlaytestFailure(Exception):
@@ -484,6 +491,9 @@ class Playtester:
             "formation_0_x": combine_sprite_x(vic(SPRITE0_X), msb, 0),
             "formation_1_x": combine_sprite_x(vic(SPRITE3_X), msb, 3),
             "formation_2_x": combine_sprite_x(vic(SPRITE4_X), msb, 4),
+            "formation_3_x": combine_sprite_x(vic(SPRITE5_X), msb, 5),
+            "formation_4_x": combine_sprite_x(vic(SPRITE6_X), msb, 6),
+            "formation_5_x": combine_sprite_x(vic(SPRITE7_X), msb, 7),
             "formation_y": vic(SPRITE0_Y),
             "shot_x": combine_sprite_x(vic(SPRITE2_X), msb, 2),
             "shot_y": vic(SPRITE2_Y),
@@ -494,6 +504,9 @@ class Playtester:
             "formation_0_enabled": (sprite_enable & 0x01) != 0,
             "formation_1_enabled": (sprite_enable & 0x08) != 0,
             "formation_2_enabled": (sprite_enable & 0x10) != 0,
+            "formation_3_enabled": (sprite_enable & 0x20) != 0,
+            "formation_4_enabled": (sprite_enable & 0x40) != 0,
+            "formation_5_enabled": (sprite_enable & 0x80) != 0,
             "joystick_port_2": joystick_value,
             "joystick_left_pressed": (joystick_value & LEFT_MASK) == 0,
             "joystick_right_pressed": (joystick_value & RIGHT_MASK) == 0,
@@ -621,6 +634,21 @@ class Playtester:
                 "x": sample["formation_2_x"],
                 "enabled": sample["formation_2_enabled"],
             },
+            {
+                "index": 3,
+                "x": sample["formation_3_x"],
+                "enabled": sample["formation_3_enabled"],
+            },
+            {
+                "index": 4,
+                "x": sample["formation_4_x"],
+                "enabled": sample["formation_4_enabled"],
+            },
+            {
+                "index": 5,
+                "x": sample["formation_5_x"],
+                "enabled": sample["formation_5_enabled"],
+            },
         ]
 
     def live_formation_slots(self, sample):
@@ -666,7 +694,7 @@ class Playtester:
         bounce_state = self.formation_has_bounced()
         raise PlaytestFailure(f"formation_bounce_timeout: {bounce_state}")
 
-    def choose_target_slot(self, sample, preferred_index: int = 1):
+    def choose_target_slot(self, sample, preferred_index: int = 4):
         live_slots = self.live_formation_slots(sample)
         if not live_slots:
             raise PlaytestFailure(f"no_live_formation_slots: {sample}")
@@ -675,7 +703,7 @@ class Playtester:
                 return preferred_index
         return live_slots[len(live_slots) // 2]["index"]
 
-    def align_player_with_formation_slot(self, preferred_index: int = 1):
+    def align_player_with_formation_slot(self, preferred_index: int = 4):
         self.logger.log("Aligning the player ship under a live formation slot before firing")
         last_detail = None
         for _ in range(40):
@@ -712,7 +740,8 @@ class Playtester:
             launched = self.capture_sample(f"fire-{attempt}-launch")
             self.assert_true(
                 f"fire_{attempt}_shot_spawned",
-                launched["shot_enabled"] or self.formation_alive_count(launched) < 3,
+                launched["shot_enabled"]
+                or self.formation_alive_count(launched) < INITIAL_FORMATION_ALIVE_COUNT,
                 launched,
             )
             return launched
@@ -721,9 +750,9 @@ class Playtester:
 
     def destroy_formation_member(self):
         attempts = []
-        initial_alive_count = 3
+        initial_alive_count = INITIAL_FORMATION_ALIVE_COUNT
         for attempt in range(1, 5):
-            alignment = self.align_player_with_formation_slot(preferred_index=1)
+            alignment = self.align_player_with_formation_slot(preferred_index=4)
             launch = self.fire_once(attempt)
             attempt_detail = {
                 "attempt": attempt,
@@ -765,7 +794,7 @@ class Playtester:
         follow_up = self.capture_sample("gap-check")
         self.assert_true(
             "gap_alive_count",
-            self.formation_alive_count(follow_up) == 2,
+            self.formation_alive_count(follow_up) == INITIAL_FORMATION_ALIVE_COUNT - 1,
             follow_up,
         )
         current_destroyed_slots = [
