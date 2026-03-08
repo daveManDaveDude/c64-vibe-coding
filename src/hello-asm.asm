@@ -75,15 +75,16 @@ BasicUpstart2(start)
 .label FORMATION_SLOT3_OFFSET = 36
 .label FORMATION_SLOT4_OFFSET = 0
 .label FORMATION_SLOT5_OFFSET = 36
-.label FLAGSHIP_SPRITE0_PTR = $80
-.label FLAGSHIP_SPRITE1_PTR = $81
-.label FLAGSHIP_SPRITE2_PTR = $82
-.label ESCORT_SPRITE0_PTR = $83
-.label ESCORT_SPRITE1_PTR = $84
-.label ESCORT_SPRITE2_PTR = $85
-.label GRUNT_SPRITE0_PTR = $86
-.label GRUNT_SPRITE1_PTR = $87
-.label GRUNT_SPRITE2_PTR = $88
+.label ARCADE_SPRITE_PTR_BASE = $85
+.label FLAGSHIP_SPRITE0_PTR = ARCADE_SPRITE_PTR_BASE + 0
+.label FLAGSHIP_SPRITE1_PTR = ARCADE_SPRITE_PTR_BASE + 1
+.label FLAGSHIP_SPRITE2_PTR = ARCADE_SPRITE_PTR_BASE + 2
+.label ESCORT_SPRITE0_PTR = ARCADE_SPRITE_PTR_BASE + 3
+.label ESCORT_SPRITE1_PTR = ARCADE_SPRITE_PTR_BASE + 4
+.label ESCORT_SPRITE2_PTR = ARCADE_SPRITE_PTR_BASE + 5
+.label GRUNT_SPRITE0_PTR = ARCADE_SPRITE_PTR_BASE + 6
+.label GRUNT_SPRITE1_PTR = ARCADE_SPRITE_PTR_BASE + 7
+.label GRUNT_SPRITE2_PTR = ARCADE_SPRITE_PTR_BASE + 8
 .label FORMATION_SLOT0_MASK = %00000001
 .label FORMATION_SLOT1_MASK = %00001000
 .label FORMATION_SLOT2_MASK = %00010000
@@ -96,19 +97,22 @@ BasicUpstart2(start)
 .label PLAYER_START_X_LO = $a8
 .label PLAYER_START_X_HI = $00
 .label PLAYER_Y = 220
+.label PLAYFIELD_LEFT_X_LO = $18
+.label PLAYFIELD_LEFT_X_HI = $00
+.label PLAYFIELD_TOP_Y = 50
 .label PLAYER_MIN_X_LO = $18
 .label PLAYER_MIN_X_HI = $00
 .label PLAYER_MAX_X_LO = $40
 .label PLAYER_MAX_X_HI = $01
-.label PLAYER_SPRITE_PTR = $c0
+.label PLAYER_SPRITE_PTR = $c5
 .label SHOT_COLOR = $01
-.label SHOT_SPRITE_PTR = $c1
+.label SHOT_SPRITE_PTR = $c6
 .label SHOT_START_Y = PLAYER_Y - 12
 .label SHOT_SPEED = 10
 .label SHOT_MIN_Y = 16
-.label SHOT_HIT_LEFT_OFFSET = 8
-.label SHOT_HIT_RIGHT_OFFSET = 15
-.label SHOT_HIT_BOTTOM_OFFSET = 7
+.label SHOT_HIT_LEFT_OFFSET = 11
+.label SHOT_HIT_RIGHT_OFFSET = 12
+.label SHOT_HIT_BOTTOM_OFFSET = 13
 .label FIRE_MASK = %00010000
 .label SCORE_FLAGSHIP_LO = $80
 .label SCORE_FLAGSHIP_MID = $00
@@ -136,11 +140,16 @@ BasicUpstart2(start)
 .label ENEMY_BULLET_COLOR = $01
 .label ENEMY_BULLET_SPEED = 2
 .label ENEMY_BULLET_START_X_OFFSET = 11
-.label ENEMY_BULLET_START_Y_OFFSET = 4
+.label ENEMY_BULLET_START_Y_OFFSET = 12
 .label ENEMY_BULLET_FIRE_COOLDOWN = 28
 .label ENEMY_BULLET_FIRE_MIN_Y = 104
 .label ENEMY_BULLET_FIRE_MAX_Y = 156
 .label ENEMY_BULLET_MAX_Y = 248
+.label ENEMY_EXPLOSION_COLOR = $07
+.label ENEMY_EXPLOSION_FRAME_TICKS = 4
+.label ENEMY_EXPLOSION_SPRITE0_PTR = $d1
+.label ENEMY_EXPLOSION_SPRITE1_PTR = $d2
+.label ENEMY_EXPLOSION_SPRITE2_PTR = $d3
 .label PLAYER_RESPAWN_DELAY = 40
 .label PLAYER_HIT_MAX_Y = PLAYER_Y + 21
 .label PLAYER_HIT_RIGHT_OFFSET = 23
@@ -168,6 +177,7 @@ main_loop:
   jsr update_shot
   jsr update_formation
   jsr update_dive_attack
+  jsr update_enemy_hit_animations
   jsr update_enemy_fire
   jmp main_loop
 
@@ -528,27 +538,48 @@ update_formation_animation:
   and #%00000011
   tax
 
+  lda formation_slot0_alive
+  beq formation_anim_slot1
   lda flagship_animation_sequence, x
   sta SPRITE_POINTERS
-  sta SPRITE_POINTERS + 3
-
-  lda escort_animation_sequence, x
-  sta SPRITE_POINTERS + 4
-  sta SPRITE_POINTERS + 5
-
-  lda grunt_animation_sequence, x
-  sta SPRITE_POINTERS + 6
-  sta SPRITE_POINTERS + 7
-
   lda #FLAGSHIP_COLOR
   sta SPRITE0_COLOR
+formation_anim_slot1:
+  lda formation_slot1_alive
+  beq formation_anim_slot2
+  lda flagship_animation_sequence, x
+  sta SPRITE_POINTERS + 3
+  lda #FLAGSHIP_COLOR
   sta SPRITE3_COLOR
+formation_anim_slot2:
+  lda formation_slot2_alive
+  beq formation_anim_slot3
+  lda escort_animation_sequence, x
+  sta SPRITE_POINTERS + 4
   lda #ESCORT_COLOR
   sta SPRITE4_COLOR
+formation_anim_slot3:
+  lda formation_slot3_alive
+  beq formation_anim_slot4
+  lda escort_animation_sequence, x
+  sta SPRITE_POINTERS + 5
+  lda #ESCORT_COLOR
   sta SPRITE5_COLOR
+formation_anim_slot4:
+  lda formation_slot4_alive
+  beq formation_anim_slot5
+  lda grunt_animation_sequence, x
+  sta SPRITE_POINTERS + 6
   lda #GRUNT_COLOR
   sta SPRITE6_COLOR
+formation_anim_slot5:
+  lda formation_slot5_alive
+  beq formation_anim_done
+  lda grunt_animation_sequence, x
+  sta SPRITE_POINTERS + 7
+  lda #GRUNT_COLOR
   sta SPRITE7_COLOR
+formation_anim_done:
   rts
 
 update_dive_attack:
@@ -1314,13 +1345,28 @@ erase_enemy_bullet_cell:
 
 compute_enemy_bullet_cell:
   lda enemy_bullet_y, x
+  sec
+  sbc #PLAYFIELD_TOP_Y
+  sta enemy_bullet_row
+
+  lda enemy_bullet_x_lo, x
+  sec
+  sbc #PLAYFIELD_LEFT_X_LO
+  sta enemy_bullet_col
+  lda enemy_bullet_x_hi, x
+  sbc #PLAYFIELD_LEFT_X_HI
+  tay
+
+  // Enemy bullets are stored in sprite-space pixels but rendered with
+  // character cells, so convert into playfield-local coordinates first.
+  lda enemy_bullet_row
   and #%00000111
   asl
   asl
   asl
   sta enemy_bullet_char
 
-  lda enemy_bullet_x_lo, x
+  lda enemy_bullet_col
   and #%00000111
   clc
   adc enemy_bullet_char
@@ -1328,19 +1374,19 @@ compute_enemy_bullet_cell:
   adc #ENEMY_BULLET_CHAR_BASE
   sta enemy_bullet_char
 
-  lda enemy_bullet_y, x
+  lda enemy_bullet_row
   lsr
   lsr
   lsr
   sta enemy_bullet_row
 
-  lda enemy_bullet_x_lo, x
+  lda enemy_bullet_col
   lsr
   lsr
   lsr
   sta enemy_bullet_col
 
-  lda enemy_bullet_x_hi, x
+  cpy #$00
   beq enemy_bullet_col_done
   lda enemy_bullet_col
   clc
@@ -1812,14 +1858,198 @@ deactivate_shot:
   sta SPRITE_X_MSB
   rts
 
+update_enemy_hit_animations:
+  ldx #$00
+enemy_hit_anim_loop:
+  lda slot_explosion_timer, x
+  beq enemy_hit_anim_next
+  dec slot_explosion_timer, x
+  bne enemy_hit_anim_next
+
+  inc slot_explosion_frame, x
+  lda slot_explosion_frame, x
+  cmp #$03
+  bcc advance_slot_explosion
+  txa
+  jsr finish_slot_explosion
+  jmp enemy_hit_anim_next
+
+advance_slot_explosion:
+  lda #ENEMY_EXPLOSION_FRAME_TICKS
+  sta slot_explosion_timer, x
+  txa
+  jsr set_slot_explosion_frame
+
+enemy_hit_anim_next:
+  inx
+  cpx #$06
+  bcc enemy_hit_anim_loop
+  rts
+
+start_slot_explosion:
+  tax
+  lda #$00
+  sta slot_explosion_frame, x
+  lda #ENEMY_EXPLOSION_FRAME_TICKS
+  sta slot_explosion_timer, x
+  txa
+  jmp set_slot_explosion_frame
+
+set_slot_explosion_frame:
+  tax
+  ldy slot_explosion_frame, x
+  lda enemy_explosion_sequence, y
+  sta enemy_explosion_pointer
+  txa
+  beq set_slot0_explosion_frame
+  cmp #$01
+  beq set_slot1_explosion_frame
+  cmp #$02
+  beq set_slot2_explosion_frame
+  cmp #$03
+  beq set_slot3_explosion_frame
+  cmp #$04
+  beq set_slot4_explosion_frame
+  jmp set_slot5_explosion_frame
+
+set_slot0_explosion_frame:
+  lda SPRITE_MULTICOLOR
+  and #%11111110
+  sta SPRITE_MULTICOLOR
+  lda enemy_explosion_pointer
+  sta SPRITE_POINTERS
+  lda #ENEMY_EXPLOSION_COLOR
+  sta SPRITE0_COLOR
+  lda SPRITE_ENABLE
+  ora #FORMATION_SLOT0_MASK
+  sta SPRITE_ENABLE
+  rts
+
+set_slot1_explosion_frame:
+  lda SPRITE_MULTICOLOR
+  and #%11110111
+  sta SPRITE_MULTICOLOR
+  lda enemy_explosion_pointer
+  sta SPRITE_POINTERS + 3
+  lda #ENEMY_EXPLOSION_COLOR
+  sta SPRITE3_COLOR
+  lda SPRITE_ENABLE
+  ora #FORMATION_SLOT1_MASK
+  sta SPRITE_ENABLE
+  rts
+
+set_slot2_explosion_frame:
+  lda SPRITE_MULTICOLOR
+  and #%11101111
+  sta SPRITE_MULTICOLOR
+  lda enemy_explosion_pointer
+  sta SPRITE_POINTERS + 4
+  lda #ENEMY_EXPLOSION_COLOR
+  sta SPRITE4_COLOR
+  lda SPRITE_ENABLE
+  ora #FORMATION_SLOT2_MASK
+  sta SPRITE_ENABLE
+  rts
+
+set_slot3_explosion_frame:
+  lda SPRITE_MULTICOLOR
+  and #%11011111
+  sta SPRITE_MULTICOLOR
+  lda enemy_explosion_pointer
+  sta SPRITE_POINTERS + 5
+  lda #ENEMY_EXPLOSION_COLOR
+  sta SPRITE5_COLOR
+  lda SPRITE_ENABLE
+  ora #FORMATION_SLOT3_MASK
+  sta SPRITE_ENABLE
+  rts
+
+set_slot4_explosion_frame:
+  lda SPRITE_MULTICOLOR
+  and #%10111111
+  sta SPRITE_MULTICOLOR
+  lda enemy_explosion_pointer
+  sta SPRITE_POINTERS + 6
+  lda #ENEMY_EXPLOSION_COLOR
+  sta SPRITE6_COLOR
+  lda SPRITE_ENABLE
+  ora #FORMATION_SLOT4_MASK
+  sta SPRITE_ENABLE
+  rts
+
+set_slot5_explosion_frame:
+  lda SPRITE_MULTICOLOR
+  and #%01111111
+  sta SPRITE_MULTICOLOR
+  lda enemy_explosion_pointer
+  sta SPRITE_POINTERS + 7
+  lda #ENEMY_EXPLOSION_COLOR
+  sta SPRITE7_COLOR
+  lda SPRITE_ENABLE
+  ora #FORMATION_SLOT5_MASK
+  sta SPRITE_ENABLE
+  rts
+
+finish_slot_explosion:
+  tax
+  lda #$00
+  sta slot_explosion_timer, x
+  sta slot_explosion_frame, x
+  txa
+  beq finish_slot0_explosion
+  cmp #$01
+  beq finish_slot1_explosion
+  cmp #$02
+  beq finish_slot2_explosion
+  cmp #$03
+  beq finish_slot3_explosion
+  cmp #$04
+  beq finish_slot4_explosion
+  jmp finish_slot5_explosion
+
+finish_slot0_explosion:
+  lda SPRITE_ENABLE
+  and #%11111110
+  sta SPRITE_ENABLE
+  rts
+
+finish_slot1_explosion:
+  lda SPRITE_ENABLE
+  and #%11110111
+  sta SPRITE_ENABLE
+  rts
+
+finish_slot2_explosion:
+  lda SPRITE_ENABLE
+  and #%11101111
+  sta SPRITE_ENABLE
+  rts
+
+finish_slot3_explosion:
+  lda SPRITE_ENABLE
+  and #%11011111
+  sta SPRITE_ENABLE
+  rts
+
+finish_slot4_explosion:
+  lda SPRITE_ENABLE
+  and #%10111111
+  sta SPRITE_ENABLE
+  rts
+
+finish_slot5_explosion:
+  lda SPRITE_ENABLE
+  and #%01111111
+  sta SPRITE_ENABLE
+  rts
+
 destroy_slot0:
   lda #$00
   sta formation_slot0_alive
   lda #$00
   jsr clear_dive_if_slot
-  lda SPRITE_ENABLE
-  and #%11111110
-  sta SPRITE_ENABLE
+  lda #$00
+  jsr start_slot_explosion
   jmp award_flagship_score
 
 destroy_slot1:
@@ -1827,9 +2057,8 @@ destroy_slot1:
   sta formation_slot1_alive
   lda #$01
   jsr clear_dive_if_slot
-  lda SPRITE_ENABLE
-  and #%11110111
-  sta SPRITE_ENABLE
+  lda #$01
+  jsr start_slot_explosion
   jmp award_flagship_score
 
 destroy_slot2:
@@ -1837,9 +2066,8 @@ destroy_slot2:
   sta formation_slot2_alive
   lda #$02
   jsr clear_dive_if_slot
-  lda SPRITE_ENABLE
-  and #%11101111
-  sta SPRITE_ENABLE
+  lda #$02
+  jsr start_slot_explosion
   jmp award_escort_score
 
 destroy_slot3:
@@ -1847,9 +2075,8 @@ destroy_slot3:
   sta formation_slot3_alive
   lda #$03
   jsr clear_dive_if_slot
-  lda SPRITE_ENABLE
-  and #%11011111
-  sta SPRITE_ENABLE
+  lda #$03
+  jsr start_slot_explosion
   jmp award_escort_score
 
 destroy_slot4:
@@ -1857,9 +2084,8 @@ destroy_slot4:
   sta formation_slot4_alive
   lda #$04
   jsr clear_dive_if_slot
-  lda SPRITE_ENABLE
-  and #%10111111
-  sta SPRITE_ENABLE
+  lda #$04
+  jsr start_slot_explosion
   jmp award_grunt_score
 
 destroy_slot5:
@@ -1867,9 +2093,8 @@ destroy_slot5:
   sta formation_slot5_alive
   lda #$05
   jsr clear_dive_if_slot
-  lda SPRITE_ENABLE
-  and #%01111111
-  sta SPRITE_ENABLE
+  lda #$05
+  jsr start_slot_explosion
   jmp award_grunt_score
 
 clear_dive_if_slot:
@@ -1997,83 +2222,121 @@ store_formation_x:
   clc
   adc #FORMATION_SLOT0_OFFSET
   sta formation_slot0_x_lo
-  sta SPRITE0_X
   lda formation_x_hi
   adc #$00
   sta formation_slot0_x_hi
+  lda formation_slot0_alive
+  beq formation_slot0_store_done
+  lda formation_slot0_x_lo
+  sta SPRITE0_X
+  lda SPRITE_X_MSB
+  and #%11111110
+  ldx formation_slot0_x_hi
+  beq formation_slot0_store_msb_done
+  ora #FORMATION_SLOT0_MASK
+formation_slot0_store_msb_done:
+  sta SPRITE_X_MSB
+formation_slot0_store_done:
 
   lda formation_x_lo
   clc
   adc #FORMATION_SLOT1_OFFSET
   sta formation_slot1_x_lo
-  sta SPRITE3_X
   lda formation_x_hi
   adc #$00
   sta formation_slot1_x_hi
+  lda formation_slot1_alive
+  beq formation_slot1_store_done
+  lda formation_slot1_x_lo
+  sta SPRITE3_X
+  lda SPRITE_X_MSB
+  and #%11110111
+  ldx formation_slot1_x_hi
+  beq formation_slot1_store_msb_done
+  ora #FORMATION_SLOT1_MASK
+formation_slot1_store_msb_done:
+  sta SPRITE_X_MSB
+formation_slot1_store_done:
 
   lda formation_x_lo
   clc
   adc #FORMATION_SLOT2_OFFSET
   sta formation_slot2_x_lo
-  sta SPRITE4_X
   lda formation_x_hi
   adc #$00
   sta formation_slot2_x_hi
+  lda formation_slot2_alive
+  beq formation_slot2_store_done
+  lda formation_slot2_x_lo
+  sta SPRITE4_X
+  lda SPRITE_X_MSB
+  and #%11101111
+  ldx formation_slot2_x_hi
+  beq formation_slot2_store_msb_done
+  ora #FORMATION_SLOT2_MASK
+formation_slot2_store_msb_done:
+  sta SPRITE_X_MSB
+formation_slot2_store_done:
 
   lda formation_x_lo
   clc
   adc #FORMATION_SLOT3_OFFSET
   sta formation_slot3_x_lo
-  sta SPRITE5_X
   lda formation_x_hi
   adc #$00
   sta formation_slot3_x_hi
+  lda formation_slot3_alive
+  beq formation_slot3_store_done
+  lda formation_slot3_x_lo
+  sta SPRITE5_X
+  lda SPRITE_X_MSB
+  and #%11011111
+  ldx formation_slot3_x_hi
+  beq formation_slot3_store_msb_done
+  ora #FORMATION_SLOT3_MASK
+formation_slot3_store_msb_done:
+  sta SPRITE_X_MSB
+formation_slot3_store_done:
 
   lda formation_x_lo
   clc
   adc #FORMATION_SLOT4_OFFSET
   sta formation_slot4_x_lo
-  sta SPRITE6_X
   lda formation_x_hi
   adc #$00
   sta formation_slot4_x_hi
+  lda formation_slot4_alive
+  beq formation_slot4_store_done
+  lda formation_slot4_x_lo
+  sta SPRITE6_X
+  lda SPRITE_X_MSB
+  and #%10111111
+  ldx formation_slot4_x_hi
+  beq formation_slot4_store_msb_done
+  ora #FORMATION_SLOT4_MASK
+formation_slot4_store_msb_done:
+  sta SPRITE_X_MSB
+formation_slot4_store_done:
 
   lda formation_x_lo
   clc
   adc #FORMATION_SLOT5_OFFSET
   sta formation_slot5_x_lo
-  sta SPRITE7_X
   lda formation_x_hi
   adc #$00
   sta formation_slot5_x_hi
-
+  lda formation_slot5_alive
+  beq formation_slot5_store_done
+  lda formation_slot5_x_lo
+  sta SPRITE7_X
   lda SPRITE_X_MSB
-  and #FORMATION_MSB_CLEAR_MASK
-  ldx formation_slot0_x_hi
-  beq formation_slot0_msb_done
-  ora #FORMATION_SLOT0_MASK
-formation_slot0_msb_done:
-  ldx formation_slot1_x_hi
-  beq formation_slot1_msb_done
-  ora #FORMATION_SLOT1_MASK
-formation_slot1_msb_done:
-  ldx formation_slot2_x_hi
-  beq formation_slot2_msb_done
-  ora #FORMATION_SLOT2_MASK
-formation_slot2_msb_done:
-  ldx formation_slot3_x_hi
-  beq formation_slot3_msb_done
-  ora #FORMATION_SLOT3_MASK
-formation_slot3_msb_done:
-  ldx formation_slot4_x_hi
-  beq formation_slot4_msb_done
-  ora #FORMATION_SLOT4_MASK
-formation_slot4_msb_done:
+  and #%01111111
   ldx formation_slot5_x_hi
-  beq formation_slot5_msb_done
+  beq formation_slot5_store_msb_done
   ora #FORMATION_SLOT5_MASK
-formation_slot5_msb_done:
+formation_slot5_store_msb_done:
   sta SPRITE_X_MSB
+formation_slot5_store_done:
   rts
 
 store_player_x:
@@ -2144,6 +2407,10 @@ formation_slot4_alive:
   .byte $01
 formation_slot5_alive:
   .byte $01
+slot_explosion_timer:
+  .fill 6, $00
+slot_explosion_frame:
+  .fill 6, $00
 dive_active:
   .byte $00
 dive_slot:
@@ -2238,6 +2505,8 @@ enemy_bullet_col:
   .byte $00
 enemy_bullet_char:
   .byte $00
+enemy_explosion_pointer:
+  .byte $00
 cpu_port_backup:
   .byte $00
 score_total_lo:
@@ -2263,17 +2532,19 @@ escort_animation_sequence:
 grunt_animation_sequence:
   .byte GRUNT_SPRITE0_PTR,GRUNT_SPRITE1_PTR,GRUNT_SPRITE0_PTR,GRUNT_SPRITE1_PTR
 flagship_dive_animation_sequence:
-  .byte FLAGSHIP_SPRITE2_PTR,$89,$8a,$8b,$8c,$8d,$8e,$8f,$90,$91
+  .byte FLAGSHIP_SPRITE2_PTR,ARCADE_SPRITE_PTR_BASE + 9,ARCADE_SPRITE_PTR_BASE + 10,ARCADE_SPRITE_PTR_BASE + 11,ARCADE_SPRITE_PTR_BASE + 12,ARCADE_SPRITE_PTR_BASE + 13,ARCADE_SPRITE_PTR_BASE + 14,ARCADE_SPRITE_PTR_BASE + 15,ARCADE_SPRITE_PTR_BASE + 16,ARCADE_SPRITE_PTR_BASE + 17
 flagship_dive_animation_colors:
   .byte FLAGSHIP_COLOR,FLAGSHIP_DIVE_COLOR,FLAGSHIP_DIVE_COLOR,FLAGSHIP_DIVE_COLOR,FLAGSHIP_DIVE_COLOR,FLAGSHIP_DIVE_COLOR,FLAGSHIP_DIVE_COLOR,FLAGSHIP_DIVE_COLOR,FLAGSHIP_DIVE_COLOR,FLAGSHIP_DIVE_COLOR
 escort_dive_animation_sequence:
-  .byte FLAGSHIP_SPRITE0_PTR,$92,$93,$94,$95,$96,$97,$98,$99,$9a
+  .byte FLAGSHIP_SPRITE0_PTR,ARCADE_SPRITE_PTR_BASE + 18,ARCADE_SPRITE_PTR_BASE + 19,ARCADE_SPRITE_PTR_BASE + 20,ARCADE_SPRITE_PTR_BASE + 21,ARCADE_SPRITE_PTR_BASE + 22,ARCADE_SPRITE_PTR_BASE + 23,ARCADE_SPRITE_PTR_BASE + 24,ARCADE_SPRITE_PTR_BASE + 25,ARCADE_SPRITE_PTR_BASE + 26
 escort_dive_animation_colors:
   .byte FLAGSHIP_COLOR,ESCORT_DIVE_COLOR,ESCORT_DIVE_COLOR,ESCORT_DIVE_COLOR,ESCORT_DIVE_COLOR,ESCORT_DIVE_COLOR,ESCORT_DIVE_COLOR,ESCORT_DIVE_COLOR,ESCORT_DIVE_COLOR,ESCORT_DIVE_COLOR
 grunt_dive_animation_sequence:
-  .byte GRUNT_SPRITE2_PTR,$9b,$9c,$9d,$9e,$9f,$a0,$a1,$a2,$a3
+  .byte GRUNT_SPRITE2_PTR,ARCADE_SPRITE_PTR_BASE + 27,ARCADE_SPRITE_PTR_BASE + 28,ARCADE_SPRITE_PTR_BASE + 29,ARCADE_SPRITE_PTR_BASE + 30,ARCADE_SPRITE_PTR_BASE + 31,ARCADE_SPRITE_PTR_BASE + 32,ARCADE_SPRITE_PTR_BASE + 33,ARCADE_SPRITE_PTR_BASE + 34,ARCADE_SPRITE_PTR_BASE + 35
 grunt_dive_animation_colors:
   .byte GRUNT_COLOR,GRUNT_DIVE_COLOR,GRUNT_DIVE_COLOR,GRUNT_DIVE_COLOR,GRUNT_DIVE_COLOR,GRUNT_DIVE_COLOR,GRUNT_DIVE_COLOR,GRUNT_DIVE_COLOR,GRUNT_DIVE_COLOR,GRUNT_DIVE_COLOR
+enemy_explosion_sequence:
+  .byte ENEMY_EXPLOSION_SPRITE0_PTR,ENEMY_EXPLOSION_SPRITE1_PTR,ENEMY_EXPLOSION_SPRITE2_PTR
 screen_row_lo:
   .for (var row = 0; row < 25; row++) {
     .byte <(SCREEN_RAM + (row * 40))
@@ -2291,47 +2562,63 @@ color_row_hi:
     .byte >(COLOR_RAM + (row * 40))
   }
 
-* = $2000 "Arcade Sprites"
+* = $2140 "Arcade Sprites"
 
 .import binary "generated_arcade_sprites.bin"
 
-* = $3000 "Player Sprite"
+* = $3140 "Player Sprite"
 
 player_sprite:
+  .byte $01,$c0,$00
+  .byte $03,$e0,$00
+  .byte $07,$f0,$00
+  .byte $07,$f0,$00
+  .byte $04,$90,$00
+  .byte $11,$c4,$00
+  .byte $11,$c4,$00
+  .byte $39,$ce,$00
+  .byte $3b,$ee,$00
+  .byte $3f,$fe,$00
+  .byte $3f,$fe,$00
+  .byte $3d,$de,$00
+  .byte $39,$4e,$00
+  .byte $39,$4e,$00
+  .byte $38,$0e,$00
+  .byte $10,$04,$00
   .byte $00,$00,$00
   .byte $00,$00,$00
   .byte $00,$00,$00
-  .byte $00,$18,$00
-  .byte $00,$3c,$00
-  .byte $00,$7e,$00
-  .byte $00,$ff,$00
-  .byte $01,$ff,$80
-  .byte $03,$ff,$c0
-  .byte $07,$ff,$e0
-  .byte $0f,$ff,$f0
-  .byte $1f,$ff,$f8
-  .byte $3f,$ff,$fc
-  .byte $7f,$ff,$fe
-  .byte $ff,$ff,$ff
-  .byte $1f,$ff,$f8
-  .byte $0f,$ff,$f0
-  .byte $0c,$66,$30
-  .byte $18,$00,$18
-  .byte $30,$00,$0c
-  .byte $60,$00,$06
+  .byte $00,$00,$00
+  .byte $00,$00,$00
   .byte $00
 
-* = $3040 "Shot Sprite"
+* = $3180 "Shot Sprite"
 
 shot_sprite:
-  .byte $00,$ff,$00
-  .byte $00,$ff,$00
-  .byte $00,$ff,$00
-  .byte $00,$ff,$00
-  .byte $00,$ff,$00
-  .byte $00,$ff,$00
+  .byte $00,$18,$00
+  .byte $00,$18,$00
+  .byte $00,$18,$00
+  .byte $00,$18,$00
+  .byte $00,$18,$00
+  .byte $00,$18,$00
+  .byte $00,$18,$00
+  .byte $00,$18,$00
+  .byte $00,$18,$00
+  .byte $00,$18,$00
+  .byte $00,$18,$00
+  .byte $00,$18,$00
+  .byte $00,$18,$00
+  .byte $00,$18,$00
+  .byte $00,$00,$00
+  .byte $00,$00,$00
+  .byte $00,$00,$00
+  .byte $00,$00,$00
+  .byte $00,$00,$00
+  .byte $00,$00,$00
+  .byte $00,$00,$00
+  .byte $00
 
-* = $3080 "Enemy Bullet Charset Data"
+* = $3200 "Enemy Bullet Charset Data"
 
 enemy_bullet_charset:
   .for (var sy = 0; sy < 8; sy++) {
@@ -2355,6 +2642,84 @@ enemy_bullet_charset:
   .byte $00,$00,$00
   .byte $00,$00,$00
   .byte $00,$00,$00
+  .byte $00,$00,$00
+  .byte $00,$00,$00
+  .byte $00,$00,$00
+  .byte $00,$00,$00
+  .byte $00,$00,$00
+  .byte $00
+
+* = $3440 "Enemy Explosion Sprite 0"
+
+enemy_explosion_sprite0:
+  .byte $00,$00,$00
+  .byte $00,$00,$00
+  .byte $00,$00,$00
+  .byte $00,$00,$00
+  .byte $33,$03,$00
+  .byte $00,$cf,$00
+  .byte $3f,$f3,$c0
+  .byte $0f,$fc,$00
+  .byte $0f,$f3,$00
+  .byte $30,$cc,$c0
+  .byte $cc,$f3,$00
+  .byte $33,$f0,$c0
+  .byte $00,$c0,$00
+  .byte $00,$00,$00
+  .byte $00,$00,$00
+  .byte $00,$00,$00
+  .byte $00,$00,$00
+  .byte $00,$00,$00
+  .byte $00,$00,$00
+  .byte $00,$00,$00
+  .byte $00,$00,$00
+  .byte $00
+
+* = $3480 "Enemy Explosion Sprite 1"
+
+enemy_explosion_sprite1:
+  .byte $00,$00,$00
+  .byte $00,$60,$00
+  .byte $04,$90,$00
+  .byte $00,$40,$00
+  .byte $12,$40,$00
+  .byte $25,$f8,$00
+  .byte $13,$c2,$00
+  .byte $07,$dc,$00
+  .byte $3f,$e0,$00
+  .byte $23,$88,$00
+  .byte $1a,$44,$00
+  .byte $3c,$b0,$00
+  .byte $12,$b0,$00
+  .byte $22,$58,$00
+  .byte $01,$00,$00
+  .byte $00,$10,$00
+  .byte $00,$00,$00
+  .byte $00,$00,$00
+  .byte $00,$00,$00
+  .byte $00,$00,$00
+  .byte $00,$00,$00
+  .byte $00
+
+* = $34c0 "Enemy Explosion Sprite 2"
+
+enemy_explosion_sprite2:
+  .byte $90,$50,$00
+  .byte $60,$44,$00
+  .byte $34,$c8,$00
+  .byte $08,$80,$00
+  .byte $5c,$b1,$00
+  .byte $0f,$f2,$00
+  .byte $23,$ec,$00
+  .byte $ff,$e0,$00
+  .byte $0f,$f8,$00
+  .byte $11,$ec,$00
+  .byte $36,$82,$00
+  .byte $44,$42,$00
+  .byte $88,$c8,$00
+  .byte $10,$8c,$00
+  .byte $51,$02,$00
+  .byte $84,$01,$00
   .byte $00,$00,$00
   .byte $00,$00,$00
   .byte $00,$00,$00

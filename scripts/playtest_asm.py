@@ -59,6 +59,25 @@ class PlaytestFailure(Exception):
     pass
 
 
+def load_symbols(path: Path) -> dict[str, int]:
+    if not path.exists():
+        return {}
+
+    symbols: dict[str, int] = {}
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line.startswith(".label "):
+            continue
+        name, value = line[len(".label ") :].split("=", 1)
+        name = name.strip()
+        value = value.strip()
+        if value.startswith("$"):
+            symbols[name] = int(value[1:], 16)
+        else:
+            symbols[name] = int(value, 10)
+    return symbols
+
+
 class Logger:
     def __init__(self, path: Path):
         self.path = path
@@ -324,6 +343,7 @@ class Playtester:
     def __init__(self, args, logger: Logger):
         self.args = args
         self.logger = logger
+        self.symbols = load_symbols(args.prg.with_suffix(".sym"))
         capture_region = f"{args.window_x},{args.window_y},{args.window_width},{args.window_height}"
         self.gui = MacOSGui(args.process_name, logger, capture_region)
         self.monitor = None
@@ -479,6 +499,9 @@ class Playtester:
     def read_state(self, include_joystick: bool = True):
         vic_data = self.monitor.mem_get(SPRITE0_X, (SPRITE_ENABLE - SPRITE0_X) + 1)
         joystick_value = self.monitor.mem_get(JOYSTICK_PORT_2, 1)[0] if include_joystick else None
+        alive_data = None
+        if "formation_slot0_alive" in self.symbols:
+            alive_data = self.monitor.mem_get(self.symbols["formation_slot0_alive"], INITIAL_FORMATION_ALIVE_COUNT)
 
         def vic(offset: int) -> int:
             return vic_data[offset - SPRITE0_X]
@@ -507,6 +530,12 @@ class Playtester:
             "formation_3_enabled": (sprite_enable & 0x20) != 0,
             "formation_4_enabled": (sprite_enable & 0x40) != 0,
             "formation_5_enabled": (sprite_enable & 0x80) != 0,
+            "formation_0_alive": alive_data[0] != 0 if alive_data is not None else (sprite_enable & 0x01) != 0,
+            "formation_1_alive": alive_data[1] != 0 if alive_data is not None else (sprite_enable & 0x08) != 0,
+            "formation_2_alive": alive_data[2] != 0 if alive_data is not None else (sprite_enable & 0x10) != 0,
+            "formation_3_alive": alive_data[3] != 0 if alive_data is not None else (sprite_enable & 0x20) != 0,
+            "formation_4_alive": alive_data[4] != 0 if alive_data is not None else (sprite_enable & 0x40) != 0,
+            "formation_5_alive": alive_data[5] != 0 if alive_data is not None else (sprite_enable & 0x80) != 0,
             "joystick_port_2": joystick_value,
             "joystick_left_pressed": (joystick_value & LEFT_MASK) == 0 if include_joystick else False,
             "joystick_right_pressed": (joystick_value & RIGHT_MASK) == 0 if include_joystick else False,
@@ -622,37 +651,37 @@ class Playtester:
             {
                 "index": 0,
                 "x": sample["formation_0_x"],
-                "enabled": sample["formation_0_enabled"],
+                "alive": sample["formation_0_alive"],
             },
             {
                 "index": 1,
                 "x": sample["formation_1_x"],
-                "enabled": sample["formation_1_enabled"],
+                "alive": sample["formation_1_alive"],
             },
             {
                 "index": 2,
                 "x": sample["formation_2_x"],
-                "enabled": sample["formation_2_enabled"],
+                "alive": sample["formation_2_alive"],
             },
             {
                 "index": 3,
                 "x": sample["formation_3_x"],
-                "enabled": sample["formation_3_enabled"],
+                "alive": sample["formation_3_alive"],
             },
             {
                 "index": 4,
                 "x": sample["formation_4_x"],
-                "enabled": sample["formation_4_enabled"],
+                "alive": sample["formation_4_alive"],
             },
             {
                 "index": 5,
                 "x": sample["formation_5_x"],
-                "enabled": sample["formation_5_enabled"],
+                "alive": sample["formation_5_alive"],
             },
         ]
 
     def live_formation_slots(self, sample):
-        return [slot for slot in self.formation_slots(sample) if slot["enabled"]]
+        return [slot for slot in self.formation_slots(sample) if slot["alive"]]
 
     def formation_alive_count(self, sample):
         return len(self.live_formation_slots(sample))
@@ -780,7 +809,7 @@ class Playtester:
                 if self.formation_alive_count(watch_sample) == initial_alive_count - 1:
                     attempt_detail["result"] = "hit"
                     attempt_detail["destroyed_slots"] = [
-                        slot["index"] for slot in self.formation_slots(watch_sample) if not slot["enabled"]
+                        slot["index"] for slot in self.formation_slots(watch_sample) if not slot["alive"]
                     ]
                     attempt_detail["final_sample"] = watch_sample
                     attempts.append(attempt_detail)
@@ -808,7 +837,7 @@ class Playtester:
             follow_up,
         )
         current_destroyed_slots = [
-            slot["index"] for slot in self.formation_slots(follow_up) if not slot["enabled"]
+            slot["index"] for slot in self.formation_slots(follow_up) if not slot["alive"]
         ]
         self.assert_true(
             "gap_same_slot_missing",
