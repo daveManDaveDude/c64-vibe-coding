@@ -75,7 +75,7 @@ BasicUpstart2(start)
 .label FORMATION_SLOT3_OFFSET = 36
 .label FORMATION_SLOT4_OFFSET = 0
 .label FORMATION_SLOT5_OFFSET = 36
-.label ARCADE_SPRITE_PTR_BASE = $85
+.label ARCADE_SPRITE_PTR_BASE = $87
 .label FLAGSHIP_SPRITE0_PTR = ARCADE_SPRITE_PTR_BASE + 0
 .label FLAGSHIP_SPRITE1_PTR = ARCADE_SPRITE_PTR_BASE + 1
 .label FLAGSHIP_SPRITE2_PTR = ARCADE_SPRITE_PTR_BASE + 2
@@ -104,9 +104,9 @@ BasicUpstart2(start)
 .label PLAYER_MIN_X_HI = $00
 .label PLAYER_MAX_X_LO = $40
 .label PLAYER_MAX_X_HI = $01
-.label PLAYER_SPRITE_PTR = $c5
+.label PLAYER_SPRITE_PTR = $c8
 .label SHOT_COLOR = $01
-.label SHOT_SPRITE_PTR = $c6
+.label SHOT_SPRITE_PTR = $c9
 .label SHOT_START_Y = PLAYER_Y - 12
 .label SHOT_SPEED = 10
 .label SHOT_MIN_Y = 16
@@ -132,7 +132,7 @@ BasicUpstart2(start)
 .label DIVE_PHASE0_TICKS = 18
 .label DIVE_PHASE1_TICKS = 20
 .label DIVE_EXIT_Y = 246
-.label DIVE_ANIMATION_RATE = 4
+.label DIVE_ANIMATION_RATE = 1
 .label DIVE_ANIMATION_MAX_FRAME = 9
 .label DIVE_FIRE_HOLD_TICKS = 10
 .label ENEMY_BULLET_LIMIT = 2
@@ -147,9 +147,9 @@ BasicUpstart2(start)
 .label ENEMY_BULLET_MAX_Y = 248
 .label ENEMY_EXPLOSION_COLOR = $07
 .label ENEMY_EXPLOSION_FRAME_TICKS = 4
-.label ENEMY_EXPLOSION_SPRITE0_PTR = $d1
-.label ENEMY_EXPLOSION_SPRITE1_PTR = $d2
-.label ENEMY_EXPLOSION_SPRITE2_PTR = $d3
+.label ENEMY_EXPLOSION_SPRITE0_PTR = $d3
+.label ENEMY_EXPLOSION_SPRITE1_PTR = $d4
+.label ENEMY_EXPLOSION_SPRITE2_PTR = $d5
 .label PLAYER_RESPAWN_DELAY = 40
 .label PLAYER_HIT_MAX_Y = PLAYER_Y + 21
 .label PLAYER_HIT_RIGHT_OFFSET = 23
@@ -586,7 +586,8 @@ update_dive_attack:
   lda dive_active
   beq dive_wait_for_launch
 
-  jsr update_dive_animation
+  lda #$00
+  sta dive_moved_this_tick
 
   lda dive_phase
   beq dive_phase0_update
@@ -650,6 +651,7 @@ dive_phase2_move_down:
   bcs finish_dive_return
 
 dive_store_position:
+  jsr update_dive_animation
   jsr store_dive_position
   rts
 
@@ -844,19 +846,27 @@ begin_dive:
   rts
 
 update_dive_animation:
-  lda dive_anim_frame
-  cmp #DIVE_ANIMATION_MAX_FRAME
-  bcs dive_animation_done
-
   inc dive_anim_tick
   lda dive_anim_tick
   cmp #DIVE_ANIMATION_RATE
-  bcc dive_animation_done
+  bcc dive_animation_return
 
   lda #$00
   sta dive_anim_tick
+  lda dive_moved_this_tick
+  beq unwind_dive_animation
+
+  lda dive_anim_frame
+  cmp #DIVE_ANIMATION_MAX_FRAME
+  bcs dive_animation_return
   inc dive_anim_frame
-dive_animation_done:
+dive_animation_return:
+  rts
+
+unwind_dive_animation:
+  lda dive_anim_frame
+  beq dive_animation_return
+  dec dive_anim_frame
   rts
 
 move_dive_outward:
@@ -906,6 +916,11 @@ steer_dive_done:
 
 dive_move_left_one:
   lda dive_x_lo
+  sta dive_prev_x_lo
+  lda dive_x_hi
+  sta dive_prev_x_hi
+
+  lda dive_x_lo
   bne dive_dec_low
   dec dive_x_hi
 dive_dec_low:
@@ -914,20 +929,35 @@ dive_dec_low:
   lda dive_x_hi
   cmp #PLAYER_MIN_X_HI
   bcc dive_clamp_min
-  bne dive_move_left_done
+  bne dive_mark_left_motion
   lda dive_x_lo
   cmp #PLAYER_MIN_X_LO
-  bcs dive_move_left_done
+  bcs dive_mark_left_motion
 
 dive_clamp_min:
   lda #PLAYER_MIN_X_LO
   sta dive_x_lo
   lda #PLAYER_MIN_X_HI
   sta dive_x_hi
+dive_mark_left_motion:
+  lda dive_x_lo
+  cmp dive_prev_x_lo
+  bne dive_left_changed
+  lda dive_x_hi
+  cmp dive_prev_x_hi
+  beq dive_move_left_done
+dive_left_changed:
+  lda #$01
+  sta dive_moved_this_tick
 dive_move_left_done:
   rts
 
 dive_move_right_one:
+  lda dive_x_lo
+  sta dive_prev_x_lo
+  lda dive_x_hi
+  sta dive_prev_x_hi
+
   inc dive_x_lo
   bne dive_check_max
   inc dive_x_hi
@@ -935,17 +965,27 @@ dive_move_right_one:
 dive_check_max:
   lda dive_x_hi
   cmp #PLAYER_MAX_X_HI
-  bcc dive_move_right_done
+  bcc dive_mark_right_motion
   bne dive_clamp_max
   lda dive_x_lo
   cmp #PLAYER_MAX_X_LO
-  bcc dive_move_right_done
+  bcc dive_mark_right_motion
 
 dive_clamp_max:
   lda #PLAYER_MAX_X_LO
   sta dive_x_lo
   lda #PLAYER_MAX_X_HI
   sta dive_x_hi
+dive_mark_right_motion:
+  lda dive_x_lo
+  cmp dive_prev_x_lo
+  bne dive_right_changed
+  lda dive_x_hi
+  cmp dive_prev_x_hi
+  beq dive_move_right_done
+dive_right_changed:
+  lda #$01
+  sta dive_moved_this_tick
 dive_move_right_done:
   rts
 
@@ -2411,6 +2451,12 @@ slot_explosion_timer:
   .fill 6, $00
 slot_explosion_frame:
   .fill 6, $00
+dive_moved_this_tick:
+  .byte $00
+dive_prev_x_lo:
+  .byte $00
+dive_prev_x_hi:
+  .byte $00
 dive_active:
   .byte $00
 dive_slot:
@@ -2562,11 +2608,11 @@ color_row_hi:
     .byte >(COLOR_RAM + (row * 40))
   }
 
-* = $2140 "Arcade Sprites"
+* = $21c0 "Arcade Sprites"
 
 .import binary "generated_arcade_sprites.bin"
 
-* = $3140 "Player Sprite"
+* = $3200 "Player Sprite"
 
 player_sprite:
   .byte $01,$c0,$00
@@ -2592,7 +2638,7 @@ player_sprite:
   .byte $00,$00,$00
   .byte $00
 
-* = $3180 "Shot Sprite"
+* = $3240 "Shot Sprite"
 
 shot_sprite:
   .byte $00,$18,$00
@@ -2618,7 +2664,7 @@ shot_sprite:
   .byte $00,$00,$00
   .byte $00
 
-* = $3200 "Enemy Bullet Charset Data"
+* = $3280 "Enemy Bullet Charset Data"
 
 enemy_bullet_charset:
   .for (var sy = 0; sy < 8; sy++) {
@@ -2649,7 +2695,7 @@ enemy_bullet_charset:
   .byte $00,$00,$00
   .byte $00
 
-* = $3440 "Enemy Explosion Sprite 0"
+* = $34c0 "Enemy Explosion Sprite 0"
 
 enemy_explosion_sprite0:
   .byte $00,$00,$00
@@ -2675,7 +2721,7 @@ enemy_explosion_sprite0:
   .byte $00,$00,$00
   .byte $00
 
-* = $3480 "Enemy Explosion Sprite 1"
+* = $3500 "Enemy Explosion Sprite 1"
 
 enemy_explosion_sprite1:
   .byte $00,$00,$00
@@ -2701,7 +2747,7 @@ enemy_explosion_sprite1:
   .byte $00,$00,$00
   .byte $00
 
-* = $34c0 "Enemy Explosion Sprite 2"
+* = $3540 "Enemy Explosion Sprite 2"
 
 enemy_explosion_sprite2:
   .byte $90,$50,$00
