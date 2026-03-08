@@ -51,6 +51,9 @@ BasicUpstart2(start)
 .label FLAGSHIP_COLOR = $07
 .label ESCORT_COLOR = $04
 .label GRUNT_COLOR = $03
+.label FLAGSHIP_DIVE_COLOR = $08
+.label ESCORT_DIVE_COLOR = $06
+.label GRUNT_DIVE_COLOR = $0b
 .label HIT_FLASH_COLOR = $01
 .label BORDER_BASE_COLOR = $06
 .label FORMATION_START_X_LO = $58
@@ -93,9 +96,9 @@ BasicUpstart2(start)
 .label PLAYER_MIN_X_HI = $00
 .label PLAYER_MAX_X_LO = $40
 .label PLAYER_MAX_X_HI = $01
-.label PLAYER_SPRITE_PTR = $89
+.label PLAYER_SPRITE_PTR = $c0
 .label SHOT_COLOR = $01
-.label SHOT_SPRITE_PTR = $8a
+.label SHOT_SPRITE_PTR = $c1
 .label SHOT_START_Y = PLAYER_Y - 12
 .label SHOT_SPEED = 10
 .label SHOT_MIN_Y = 16
@@ -113,6 +116,16 @@ BasicUpstart2(start)
 .label SCORE_GRUNT_MID = $00
 .label SCORE_GRUNT_HI = $00
 .label FORMATION_ANIMATION_SHIFT = 5
+.label DIVE_SLOT_NONE = $ff
+.label DIVE_DIRECTION_LEFT = $00
+.label DIVE_DIRECTION_RIGHT = $01
+.label DIVE_START_DELAY = 80
+.label DIVE_RETRY_DELAY = 32
+.label DIVE_PHASE0_TICKS = 18
+.label DIVE_PHASE1_TICKS = 20
+.label DIVE_EXIT_Y = 246
+.label DIVE_ANIMATION_RATE = 4
+.label DIVE_ANIMATION_MAX_FRAME = 9
 
 * = $1000 "Main Program"
 
@@ -126,6 +139,7 @@ start:
   jsr init_formation
   jsr init_player
   jsr init_shot
+  jsr init_dive_attack
 
 main_loop:
   jsr wait_frame
@@ -133,6 +147,7 @@ main_loop:
   jsr update_player
   jsr update_shot
   jsr update_formation
+  jsr update_dive_attack
   jmp main_loop
 
 init_vic:
@@ -307,6 +322,28 @@ init_shot:
   sta SPRITE_X_MSB
   rts
 
+init_dive_attack:
+  lda #$00
+  sta dive_active
+  sta dive_phase
+  sta dive_timer
+  sta dive_direction
+  sta dive_column_toggle
+  sta dive_anim_frame
+  sta dive_anim_tick
+  sta dive_sprite_pointer
+  sta dive_sprite_color
+  sta dive_x_lo
+  sta dive_x_hi
+  sta dive_y
+
+  lda #DIVE_SLOT_NONE
+  sta dive_slot
+
+  lda #DIVE_START_DELAY
+  sta dive_delay
+  rts
+
 wait_frame:
   lda #$ff
 wait_for_line_255:
@@ -414,6 +451,589 @@ update_formation_animation:
   lda grunt_animation_sequence, x
   sta SPRITE_POINTERS + 6
   sta SPRITE_POINTERS + 7
+
+  lda #FLAGSHIP_COLOR
+  sta SPRITE0_COLOR
+  sta SPRITE3_COLOR
+  lda #ESCORT_COLOR
+  sta SPRITE4_COLOR
+  sta SPRITE5_COLOR
+  lda #GRUNT_COLOR
+  sta SPRITE6_COLOR
+  sta SPRITE7_COLOR
+  rts
+
+update_dive_attack:
+  lda dive_active
+  beq dive_wait_for_launch
+
+  jsr update_dive_animation
+
+  lda dive_phase
+  beq dive_phase0_update
+  cmp #$01
+  beq dive_phase1_update
+  jmp dive_phase2_update
+
+dive_wait_for_launch:
+  lda dive_delay
+  beq dive_try_launch
+  dec dive_delay
+  rts
+
+dive_try_launch:
+  jsr launch_dive_if_possible
+  rts
+
+dive_phase0_update:
+  jsr move_dive_outward
+  jsr steer_dive_toward_player
+  inc dive_y
+  dec dive_timer
+  bne dive_store_position
+
+  lda #$01
+  sta dive_phase
+  lda #DIVE_PHASE1_TICKS
+  sta dive_timer
+  jmp dive_store_position
+
+dive_phase1_update:
+  jsr sweep_dive_outward_once
+  jsr steer_dive_toward_player
+  jsr steer_dive_toward_player
+  lda dive_y
+  clc
+  adc #$02
+  sta dive_y
+  dec dive_timer
+  bne dive_store_position
+
+  lda #$02
+  sta dive_phase
+  jmp dive_store_position
+
+dive_phase2_update:
+  jsr steer_dive_toward_player
+  jsr steer_dive_toward_player
+  lda dive_y
+  clc
+  adc #$03
+  sta dive_y
+  cmp #DIVE_EXIT_Y
+  bcs finish_dive_return
+
+dive_store_position:
+  jsr store_dive_position
+  rts
+
+finish_dive_return:
+  jsr store_formation_x
+  jsr restore_dive_slot_y
+
+  lda #$00
+  sta dive_active
+  sta dive_phase
+  sta dive_timer
+  sta dive_anim_frame
+  sta dive_anim_tick
+
+  lda #DIVE_SLOT_NONE
+  sta dive_slot
+
+  lda #DIVE_START_DELAY
+  sta dive_delay
+  rts
+
+launch_dive_if_possible:
+  lda dive_column_toggle
+  beq launch_left_column_first
+
+launch_right_column_first:
+  jsr try_launch_slot5
+  bcs dive_launch_success
+  jsr try_launch_slot3
+  bcs dive_launch_success
+  jsr try_launch_slot1
+  bcs dive_launch_success
+  jsr try_launch_slot4
+  bcs dive_launch_success
+  jsr try_launch_slot2
+  bcs dive_launch_success
+  jsr try_launch_slot0
+  bcs dive_launch_success
+  lda #DIVE_RETRY_DELAY
+  sta dive_delay
+  clc
+  rts
+
+launch_left_column_first:
+  jsr try_launch_slot4
+  bcs dive_launch_success
+  jsr try_launch_slot2
+  bcs dive_launch_success
+  jsr try_launch_slot0
+  bcs dive_launch_success
+  jsr try_launch_slot5
+  bcs dive_launch_success
+  jsr try_launch_slot3
+  bcs dive_launch_success
+  jsr try_launch_slot1
+  bcs dive_launch_success
+  lda #DIVE_RETRY_DELAY
+  sta dive_delay
+  clc
+  rts
+
+dive_launch_success:
+  lda dive_column_toggle
+  eor #$01
+  sta dive_column_toggle
+  sec
+  rts
+
+try_launch_slot0:
+  lda formation_slot0_alive
+  bne launch_slot0
+  clc
+  rts
+launch_slot0:
+  lda #$00
+  sta dive_slot
+  lda formation_slot0_x_lo
+  sta dive_x_lo
+  lda formation_slot0_x_hi
+  sta dive_x_hi
+  lda #FORMATION_TOP_Y
+  sta dive_y
+  lda #DIVE_DIRECTION_LEFT
+  sta dive_direction
+  jmp begin_dive
+
+try_launch_slot1:
+  lda formation_slot1_alive
+  bne launch_slot1
+  clc
+  rts
+launch_slot1:
+  lda #$01
+  sta dive_slot
+  lda formation_slot1_x_lo
+  sta dive_x_lo
+  lda formation_slot1_x_hi
+  sta dive_x_hi
+  lda #FORMATION_TOP_Y
+  sta dive_y
+  lda #DIVE_DIRECTION_RIGHT
+  sta dive_direction
+  jmp begin_dive
+
+try_launch_slot2:
+  lda formation_slot2_alive
+  bne launch_slot2
+  clc
+  rts
+launch_slot2:
+  lda #$02
+  sta dive_slot
+  lda formation_slot2_x_lo
+  sta dive_x_lo
+  lda formation_slot2_x_hi
+  sta dive_x_hi
+  lda #FORMATION_MID_Y
+  sta dive_y
+  lda #DIVE_DIRECTION_LEFT
+  sta dive_direction
+  jmp begin_dive
+
+try_launch_slot3:
+  lda formation_slot3_alive
+  bne launch_slot3
+  clc
+  rts
+launch_slot3:
+  lda #$03
+  sta dive_slot
+  lda formation_slot3_x_lo
+  sta dive_x_lo
+  lda formation_slot3_x_hi
+  sta dive_x_hi
+  lda #FORMATION_MID_Y
+  sta dive_y
+  lda #DIVE_DIRECTION_RIGHT
+  sta dive_direction
+  jmp begin_dive
+
+try_launch_slot4:
+  lda formation_slot4_alive
+  bne launch_slot4
+  clc
+  rts
+launch_slot4:
+  lda #$04
+  sta dive_slot
+  lda formation_slot4_x_lo
+  sta dive_x_lo
+  lda formation_slot4_x_hi
+  sta dive_x_hi
+  lda #FORMATION_BOTTOM_Y
+  sta dive_y
+  lda #DIVE_DIRECTION_LEFT
+  sta dive_direction
+  jmp begin_dive
+
+try_launch_slot5:
+  lda formation_slot5_alive
+  bne launch_slot5
+  clc
+  rts
+launch_slot5:
+  lda #$05
+  sta dive_slot
+  lda formation_slot5_x_lo
+  sta dive_x_lo
+  lda formation_slot5_x_hi
+  sta dive_x_hi
+  lda #FORMATION_BOTTOM_Y
+  sta dive_y
+  lda #DIVE_DIRECTION_RIGHT
+  sta dive_direction
+  jmp begin_dive
+
+begin_dive:
+  lda #$01
+  sta dive_active
+  lda #$00
+  sta dive_phase
+  sta dive_anim_frame
+  sta dive_anim_tick
+  lda #DIVE_PHASE0_TICKS
+  sta dive_timer
+  lda #DIVE_START_DELAY
+  sta dive_delay
+  jsr store_dive_position
+  sec
+  rts
+
+update_dive_animation:
+  lda dive_anim_frame
+  cmp #DIVE_ANIMATION_MAX_FRAME
+  bcs dive_animation_done
+
+  inc dive_anim_tick
+  lda dive_anim_tick
+  cmp #DIVE_ANIMATION_RATE
+  bcc dive_animation_done
+
+  lda #$00
+  sta dive_anim_tick
+  inc dive_anim_frame
+dive_animation_done:
+  rts
+
+move_dive_outward:
+  lda dive_direction
+  beq dive_outward_left
+  jsr dive_move_right_one
+  jsr dive_move_right_one
+  jsr dive_move_right_one
+  rts
+
+dive_outward_left:
+  jsr dive_move_left_one
+  jsr dive_move_left_one
+  jsr dive_move_left_one
+  rts
+
+sweep_dive_outward_once:
+  lda dive_direction
+  beq sweep_dive_left_once
+  jsr dive_move_right_one
+  rts
+
+sweep_dive_left_once:
+  jsr dive_move_left_one
+  rts
+
+steer_dive_toward_player:
+  lda dive_x_hi
+  cmp player_x_hi
+  bcc steer_dive_right
+  bne steer_dive_left
+
+  lda dive_x_lo
+  cmp player_x_lo
+  bcc steer_dive_right
+  beq steer_dive_done
+
+steer_dive_left:
+  jsr dive_move_left_one
+  rts
+
+steer_dive_right:
+  jsr dive_move_right_one
+
+steer_dive_done:
+  rts
+
+dive_move_left_one:
+  lda dive_x_lo
+  bne dive_dec_low
+  dec dive_x_hi
+dive_dec_low:
+  dec dive_x_lo
+
+  lda dive_x_hi
+  cmp #PLAYER_MIN_X_HI
+  bcc dive_clamp_min
+  bne dive_move_left_done
+  lda dive_x_lo
+  cmp #PLAYER_MIN_X_LO
+  bcs dive_move_left_done
+
+dive_clamp_min:
+  lda #PLAYER_MIN_X_LO
+  sta dive_x_lo
+  lda #PLAYER_MIN_X_HI
+  sta dive_x_hi
+dive_move_left_done:
+  rts
+
+dive_move_right_one:
+  inc dive_x_lo
+  bne dive_check_max
+  inc dive_x_hi
+
+dive_check_max:
+  lda dive_x_hi
+  cmp #PLAYER_MAX_X_HI
+  bcc dive_move_right_done
+  bne dive_clamp_max
+  lda dive_x_lo
+  cmp #PLAYER_MAX_X_LO
+  bcc dive_move_right_done
+
+dive_clamp_max:
+  lda #PLAYER_MAX_X_LO
+  sta dive_x_lo
+  lda #PLAYER_MAX_X_HI
+  sta dive_x_hi
+dive_move_right_done:
+  rts
+
+store_dive_position:
+  jsr select_dive_animation_frame
+  lda dive_slot
+  beq store_dive_position_slot0
+  cmp #$01
+  beq store_dive_position_slot1
+  cmp #$02
+  beq store_dive_position_slot2
+  cmp #$03
+  beq store_dive_position_slot3
+  cmp #$04
+  beq store_dive_position_slot4
+  cmp #$05
+  beq store_dive_position_slot5
+  rts
+
+store_dive_position_slot0:
+  jmp store_dive_slot0
+
+store_dive_position_slot1:
+  jmp store_dive_slot1
+
+store_dive_position_slot2:
+  jmp store_dive_slot2
+
+store_dive_position_slot3:
+  jmp store_dive_slot3
+
+store_dive_position_slot4:
+  jmp store_dive_slot4
+
+store_dive_position_slot5:
+  jmp store_dive_slot5
+
+store_dive_slot0:
+  lda dive_x_lo
+  sta SPRITE0_X
+  lda dive_y
+  sta SPRITE0_Y
+  lda SPRITE_X_MSB
+  and #%11111110
+  ldx dive_x_hi
+  beq store_dive_slot0_done
+  ora #FORMATION_SLOT0_MASK
+store_dive_slot0_done:
+  sta SPRITE_X_MSB
+  lda dive_sprite_pointer
+  sta SPRITE_POINTERS
+  lda dive_sprite_color
+  sta SPRITE0_COLOR
+  rts
+
+store_dive_slot1:
+  lda dive_x_lo
+  sta SPRITE3_X
+  lda dive_y
+  sta SPRITE3_Y
+  lda SPRITE_X_MSB
+  and #%11110111
+  ldx dive_x_hi
+  beq store_dive_slot1_done
+  ora #FORMATION_SLOT1_MASK
+store_dive_slot1_done:
+  sta SPRITE_X_MSB
+  lda dive_sprite_pointer
+  sta SPRITE_POINTERS + 3
+  lda dive_sprite_color
+  sta SPRITE3_COLOR
+  rts
+
+store_dive_slot2:
+  lda dive_x_lo
+  sta SPRITE4_X
+  lda dive_y
+  sta SPRITE4_Y
+  lda SPRITE_X_MSB
+  and #%11101111
+  ldx dive_x_hi
+  beq store_dive_slot2_done
+  ora #FORMATION_SLOT2_MASK
+store_dive_slot2_done:
+  sta SPRITE_X_MSB
+  lda dive_sprite_pointer
+  sta SPRITE_POINTERS + 4
+  lda dive_sprite_color
+  sta SPRITE4_COLOR
+  rts
+
+store_dive_slot3:
+  lda dive_x_lo
+  sta SPRITE5_X
+  lda dive_y
+  sta SPRITE5_Y
+  lda SPRITE_X_MSB
+  and #%11011111
+  ldx dive_x_hi
+  beq store_dive_slot3_done
+  ora #FORMATION_SLOT3_MASK
+store_dive_slot3_done:
+  sta SPRITE_X_MSB
+  lda dive_sprite_pointer
+  sta SPRITE_POINTERS + 5
+  lda dive_sprite_color
+  sta SPRITE5_COLOR
+  rts
+
+store_dive_slot4:
+  lda dive_x_lo
+  sta SPRITE6_X
+  lda dive_y
+  sta SPRITE6_Y
+  lda SPRITE_X_MSB
+  and #%10111111
+  ldx dive_x_hi
+  beq store_dive_slot4_done
+  ora #FORMATION_SLOT4_MASK
+store_dive_slot4_done:
+  sta SPRITE_X_MSB
+  lda dive_sprite_pointer
+  sta SPRITE_POINTERS + 6
+  lda dive_sprite_color
+  sta SPRITE6_COLOR
+  rts
+
+store_dive_slot5:
+  lda dive_x_lo
+  sta SPRITE7_X
+  lda dive_y
+  sta SPRITE7_Y
+  lda SPRITE_X_MSB
+  and #%01111111
+  ldx dive_x_hi
+  beq store_dive_slot5_done
+  ora #FORMATION_SLOT5_MASK
+store_dive_slot5_done:
+  sta SPRITE_X_MSB
+  lda dive_sprite_pointer
+  sta SPRITE_POINTERS + 7
+  lda dive_sprite_color
+  sta SPRITE7_COLOR
+  rts
+
+select_dive_animation_frame:
+  ldx dive_anim_frame
+  lda dive_slot
+  cmp #$02
+  bcc select_flagship_dive_animation
+  cmp #$04
+  bcc select_escort_dive_animation
+
+  lda grunt_dive_animation_sequence, x
+  sta dive_sprite_pointer
+  lda grunt_dive_animation_colors, x
+  sta dive_sprite_color
+  rts
+
+select_escort_dive_animation:
+  lda escort_dive_animation_sequence, x
+  sta dive_sprite_pointer
+  lda escort_dive_animation_colors, x
+  sta dive_sprite_color
+  rts
+
+select_flagship_dive_animation:
+  lda flagship_dive_animation_sequence, x
+  sta dive_sprite_pointer
+  lda flagship_dive_animation_colors, x
+  sta dive_sprite_color
+  rts
+
+restore_dive_slot_y:
+  lda dive_slot
+  beq restore_dive_slot0_y
+  cmp #$01
+  beq restore_dive_slot1_y
+  cmp #$02
+  beq restore_dive_slot2_y
+  cmp #$03
+  beq restore_dive_slot3_y
+  cmp #$04
+  beq restore_dive_slot4_y
+  cmp #$05
+  beq restore_dive_slot5_y
+  rts
+
+restore_dive_slot0_y:
+  lda #FORMATION_TOP_Y
+  sta SPRITE0_Y
+  rts
+
+restore_dive_slot1_y:
+  lda #FORMATION_TOP_Y
+  sta SPRITE3_Y
+  rts
+
+restore_dive_slot2_y:
+  lda #FORMATION_MID_Y
+  sta SPRITE4_Y
+  rts
+
+restore_dive_slot3_y:
+  lda #FORMATION_MID_Y
+  sta SPRITE5_Y
+  rts
+
+restore_dive_slot4_y:
+  lda #FORMATION_BOTTOM_Y
+  sta SPRITE6_Y
+  rts
+
+restore_dive_slot5_y:
+  lda #FORMATION_BOTTOM_Y
+  sta SPRITE7_Y
   rts
 
 update_player:
@@ -514,6 +1134,26 @@ shot_done:
   rts
 
 check_shot_collision:
+  lda dive_active
+  beq check_slot0
+  lda dive_x_lo
+  sta target_x_lo
+  lda dive_x_hi
+  sta target_x_hi
+  lda dive_y
+  sta target_y
+  jsr shot_hits_target
+  bcc check_slot0
+  jsr destroy_current_dive_slot
+  sec
+  rts
+
+check_slot0:
+  lda dive_active
+  beq check_slot0_alive
+  lda dive_slot
+  beq check_slot1
+check_slot0_alive:
   lda formation_slot0_alive
   beq check_slot1
   lda formation_slot0_x_lo
@@ -529,6 +1169,12 @@ check_shot_collision:
   rts
 
 check_slot1:
+  lda dive_active
+  beq check_slot1_alive
+  lda dive_slot
+  cmp #$01
+  beq check_slot2
+check_slot1_alive:
   lda formation_slot1_alive
   beq check_slot2
   lda formation_slot1_x_lo
@@ -544,6 +1190,12 @@ check_slot1:
   rts
 
 check_slot2:
+  lda dive_active
+  beq check_slot2_alive
+  lda dive_slot
+  cmp #$02
+  beq check_slot3
+check_slot2_alive:
   lda formation_slot2_alive
   beq check_slot3
   lda formation_slot2_x_lo
@@ -559,6 +1211,12 @@ check_slot2:
   rts
 
 check_slot3:
+  lda dive_active
+  beq check_slot3_alive
+  lda dive_slot
+  cmp #$03
+  beq check_slot4
+check_slot3_alive:
   lda formation_slot3_alive
   beq check_slot4
   lda formation_slot3_x_lo
@@ -574,6 +1232,12 @@ check_slot3:
   rts
 
 check_slot4:
+  lda dive_active
+  beq check_slot4_alive
+  lda dive_slot
+  cmp #$04
+  beq check_slot5
+check_slot4_alive:
   lda formation_slot4_alive
   beq check_slot5
   lda formation_slot4_x_lo
@@ -589,6 +1253,12 @@ check_slot4:
   rts
 
 check_slot5:
+  lda dive_active
+  beq check_slot5_alive
+  lda dive_slot
+  cmp #$05
+  beq no_shot_hit
+check_slot5_alive:
   lda formation_slot5_alive
   beq no_shot_hit
   lda formation_slot5_x_lo
@@ -606,6 +1276,39 @@ check_slot5:
 no_shot_hit:
   clc
   rts
+
+destroy_current_dive_slot:
+  lda dive_slot
+  beq destroy_current_dive_slot0
+  cmp #$01
+  beq destroy_current_dive_slot1
+  cmp #$02
+  beq destroy_current_dive_slot2
+  cmp #$03
+  beq destroy_current_dive_slot3
+  cmp #$04
+  beq destroy_current_dive_slot4
+  cmp #$05
+  beq destroy_current_dive_slot5
+  rts
+
+destroy_current_dive_slot0:
+  jmp destroy_slot0
+
+destroy_current_dive_slot1:
+  jmp destroy_slot1
+
+destroy_current_dive_slot2:
+  jmp destroy_slot2
+
+destroy_current_dive_slot3:
+  jmp destroy_slot3
+
+destroy_current_dive_slot4:
+  jmp destroy_slot4
+
+destroy_current_dive_slot5:
+  jmp destroy_slot5
 
 shot_hits_target:
   lda shot_y
@@ -708,6 +1411,8 @@ deactivate_shot:
 destroy_slot0:
   lda #$00
   sta formation_slot0_alive
+  lda #$00
+  jsr clear_dive_if_slot
   lda SPRITE_ENABLE
   and #%11111110
   sta SPRITE_ENABLE
@@ -716,6 +1421,8 @@ destroy_slot0:
 destroy_slot1:
   lda #$00
   sta formation_slot1_alive
+  lda #$01
+  jsr clear_dive_if_slot
   lda SPRITE_ENABLE
   and #%11110111
   sta SPRITE_ENABLE
@@ -724,6 +1431,8 @@ destroy_slot1:
 destroy_slot2:
   lda #$00
   sta formation_slot2_alive
+  lda #$02
+  jsr clear_dive_if_slot
   lda SPRITE_ENABLE
   and #%11101111
   sta SPRITE_ENABLE
@@ -732,6 +1441,8 @@ destroy_slot2:
 destroy_slot3:
   lda #$00
   sta formation_slot3_alive
+  lda #$03
+  jsr clear_dive_if_slot
   lda SPRITE_ENABLE
   and #%11011111
   sta SPRITE_ENABLE
@@ -740,6 +1451,8 @@ destroy_slot3:
 destroy_slot4:
   lda #$00
   sta formation_slot4_alive
+  lda #$04
+  jsr clear_dive_if_slot
   lda SPRITE_ENABLE
   and #%10111111
   sta SPRITE_ENABLE
@@ -748,10 +1461,32 @@ destroy_slot4:
 destroy_slot5:
   lda #$00
   sta formation_slot5_alive
+  lda #$05
+  jsr clear_dive_if_slot
   lda SPRITE_ENABLE
   and #%01111111
   sta SPRITE_ENABLE
   jmp award_grunt_score
+
+clear_dive_if_slot:
+  tax
+  lda dive_active
+  beq clear_dive_done
+  cpx dive_slot
+  bne clear_dive_done
+
+  lda #$00
+  sta dive_active
+  sta dive_phase
+  sta dive_timer
+
+  lda #DIVE_SLOT_NONE
+  sta dive_slot
+
+  lda #DIVE_START_DELAY
+  sta dive_delay
+clear_dive_done:
+  rts
 
 award_flagship_score:
   lda #SCORE_FLAGSHIP_LO
@@ -1004,6 +1739,34 @@ formation_slot4_alive:
   .byte $01
 formation_slot5_alive:
   .byte $01
+dive_active:
+  .byte $00
+dive_slot:
+  .byte DIVE_SLOT_NONE
+dive_phase:
+  .byte $00
+dive_timer:
+  .byte $00
+dive_direction:
+  .byte $00
+dive_delay:
+  .byte DIVE_START_DELAY
+dive_column_toggle:
+  .byte $00
+dive_anim_frame:
+  .byte $00
+dive_anim_tick:
+  .byte $00
+dive_sprite_pointer:
+  .byte $00
+dive_sprite_color:
+  .byte $00
+dive_x_lo:
+  .byte $00
+dive_x_hi:
+  .byte $00
+dive_y:
+  .byte $00
 player_x_lo:
   .byte PLAYER_START_X_LO
 player_x_hi:
@@ -1068,12 +1831,24 @@ escort_animation_sequence:
   .byte ESCORT_SPRITE0_PTR,ESCORT_SPRITE1_PTR,ESCORT_SPRITE0_PTR,ESCORT_SPRITE1_PTR
 grunt_animation_sequence:
   .byte GRUNT_SPRITE0_PTR,GRUNT_SPRITE1_PTR,GRUNT_SPRITE0_PTR,GRUNT_SPRITE1_PTR
+flagship_dive_animation_sequence:
+  .byte FLAGSHIP_SPRITE2_PTR,$89,$8a,$8b,$8c,$8d,$8e,$8f,$90,$91
+flagship_dive_animation_colors:
+  .byte FLAGSHIP_COLOR,FLAGSHIP_DIVE_COLOR,FLAGSHIP_DIVE_COLOR,FLAGSHIP_DIVE_COLOR,FLAGSHIP_DIVE_COLOR,FLAGSHIP_DIVE_COLOR,FLAGSHIP_DIVE_COLOR,FLAGSHIP_DIVE_COLOR,FLAGSHIP_DIVE_COLOR,FLAGSHIP_DIVE_COLOR
+escort_dive_animation_sequence:
+  .byte FLAGSHIP_SPRITE0_PTR,$92,$93,$94,$95,$96,$97,$98,$99,$9a
+escort_dive_animation_colors:
+  .byte FLAGSHIP_COLOR,ESCORT_DIVE_COLOR,ESCORT_DIVE_COLOR,ESCORT_DIVE_COLOR,ESCORT_DIVE_COLOR,ESCORT_DIVE_COLOR,ESCORT_DIVE_COLOR,ESCORT_DIVE_COLOR,ESCORT_DIVE_COLOR,ESCORT_DIVE_COLOR
+grunt_dive_animation_sequence:
+  .byte GRUNT_SPRITE2_PTR,$9b,$9c,$9d,$9e,$9f,$a0,$a1,$a2,$a3
+grunt_dive_animation_colors:
+  .byte GRUNT_COLOR,GRUNT_DIVE_COLOR,GRUNT_DIVE_COLOR,GRUNT_DIVE_COLOR,GRUNT_DIVE_COLOR,GRUNT_DIVE_COLOR,GRUNT_DIVE_COLOR,GRUNT_DIVE_COLOR,GRUNT_DIVE_COLOR,GRUNT_DIVE_COLOR
 
-* = $2000 "Enemy Sprites"
+* = $2000 "Arcade Sprites"
 
-.import binary "generated_enemy_sprites.bin"
+.import binary "generated_arcade_sprites.bin"
 
-* = $2240 "Player Sprite"
+* = $3000 "Player Sprite"
 
 player_sprite:
   .byte $00,$00,$00
@@ -1099,7 +1874,7 @@ player_sprite:
   .byte $60,$00,$06
   .byte $00
 
-* = $2280 "Shot Sprite"
+* = $3040 "Shot Sprite"
 
 shot_sprite:
   .byte $00,$ff,$00
