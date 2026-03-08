@@ -1,4 +1,7 @@
 artifacts/
+build/
+build/*.prg
+build/*.sym
 build/.pycache/
 tools/KickAssembler.zip
 tools/KickAssembler/
