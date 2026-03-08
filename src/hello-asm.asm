@@ -16,6 +16,7 @@ BasicUpstart2(start)
 .label SPRITE_MULTICOLOR = $d01c
 .label SPRITE_X_EXPAND = $d01d
 .label SPRITE_Y_EXPAND = $d017
+.label SPRITE_SPRITE_COLLISION = $d01e
 .label JOYSTICK_PORT_2 = $dc00
 .label SPRITE0_X = $d000
 .label SPRITE0_Y = $d001
@@ -23,10 +24,15 @@ BasicUpstart2(start)
 .label SPRITE1_X = $d002
 .label SPRITE1_Y = $d003
 .label SPRITE1_COLOR = $d028
+.label SPRITE2_X = $d004
+.label SPRITE2_Y = $d005
+.label SPRITE2_COLOR = $d029
 
 .label HUD_TEXT_COLOR = $01
 .label PLAYFIELD_TEXT_COLOR = $0e
 .label ALIEN_COLOR = $05
+.label HIT_FLASH_COLOR = $01
+.label BORDER_BASE_COLOR = $06
 .label ALIEN_START_X_LO = $18
 .label ALIEN_START_X_HI = $00
 .label ALIEN_Y = 60
@@ -44,6 +50,12 @@ BasicUpstart2(start)
 .label PLAYER_MAX_X_LO = $40
 .label PLAYER_MAX_X_HI = $01
 .label PLAYER_SPRITE_PTR = $81
+.label SHOT_COLOR = $01
+.label SHOT_SPRITE_PTR = $82
+.label SHOT_START_Y = PLAYER_Y - 12
+.label SHOT_SPEED = 10
+.label SHOT_MIN_Y = 16
+.label FIRE_MASK = %00010000
 
 * = $1000 "Main Program"
 
@@ -54,10 +66,13 @@ start:
   jsr draw_hud
   jsr init_alien
   jsr init_player
+  jsr init_shot
 
 main_loop:
   jsr wait_frame
+  jsr update_effects
   jsr update_player
+  jsr update_shot
   jsr update_alien
   jmp main_loop
 
@@ -76,7 +91,7 @@ init_vic:
 
   lda #$00
   sta BACKGROUND_COLOR
-  lda #$06
+  lda #BORDER_BASE_COLOR
   sta BORDER_COLOR
   rts
 
@@ -127,6 +142,7 @@ init_alien:
 
   lda #$01
   sta alien_dir
+  sta alien_alive
 
   lda #$00
   sta alien_frame
@@ -164,6 +180,33 @@ init_player:
   sta SPRITE_ENABLE
   rts
 
+init_shot:
+  lda #SHOT_SPRITE_PTR
+  sta SPRITE_POINTERS + 2
+
+  lda #SHOT_COLOR
+  sta SPRITE2_COLOR
+
+  lda #$00
+  sta shot_x_lo
+  sta shot_x_hi
+  sta shot_y
+  sta shot_active
+  sta effective_fire
+  sta fire_locked
+  sta hit_flash_timer
+
+  lda SPRITE_ENABLE
+  and #%11111011
+  sta SPRITE_ENABLE
+
+  lda SPRITE_X_MSB
+  and #%11111011
+  sta SPRITE_X_MSB
+
+  lda SPRITE_SPRITE_COLLISION
+  rts
+
 wait_frame:
   lda #$ff
 wait_for_line_255:
@@ -174,7 +217,26 @@ wait_for_next_frame:
   beq wait_for_next_frame
   rts
 
+update_effects:
+  lda hit_flash_timer
+  beq effects_done
+
+  dec hit_flash_timer
+  lda #HIT_FLASH_COLOR
+  sta BORDER_COLOR
+
+  lda hit_flash_timer
+  bne effects_done
+
+  lda #BORDER_BASE_COLOR
+  sta BORDER_COLOR
+effects_done:
+  rts
+
 update_alien:
+  lda alien_alive
+  beq alien_done
+
   inc alien_frame
   lda alien_frame
   and #$01
@@ -239,14 +301,45 @@ alien_done:
 update_player:
   jsr read_player_input
   lda effective_left
-  bne player_move_left
+  bne player_move_left_update
 
   lda effective_right
-  bne player_move_right
+  bne player_move_right_update
+  jmp handle_fire_input
+
+player_move_left_update:
+  jsr player_move_left
+  jmp handle_fire_input
+
+player_move_right_update:
+  jsr player_move_right
+
+handle_fire_input:
+  lda effective_fire
+  beq fire_released
+
+  lda fire_locked
+  bne fire_done
+
+  lda #$01
+  sta fire_locked
+
+  lda shot_active
+  bne fire_done
+
+  jsr spawn_player_shot
+fire_done:
+  rts
+
+fire_released:
+  lda #$00
+  sta fire_locked
   rts
 
 read_player_input:
   lda JOYSTICK_PORT_2
+  sta joystick_state
+
   and #%00000100
   beq joystick_left_pressed
   lda #$00
@@ -256,15 +349,103 @@ joystick_left_pressed:
   lda #$01
   sta effective_left
 joystick_right_check:
-  lda JOYSTICK_PORT_2
+  lda joystick_state
   and #%00001000
   beq joystick_right_pressed
   lda #$00
   sta effective_right
-  rts
+  jmp joystick_fire_check
 joystick_right_pressed:
   lda #$01
   sta effective_right
+joystick_fire_check:
+  lda joystick_state
+  and #FIRE_MASK
+  beq joystick_fire_pressed
+  lda #$00
+  sta effective_fire
+  rts
+joystick_fire_pressed:
+  lda #$01
+  sta effective_fire
+  rts
+
+update_shot:
+  lda shot_active
+  beq shot_done
+
+  lda SPRITE_SPRITE_COLLISION
+  and #%00000101
+  cmp #%00000101
+  beq shot_hit
+
+  lda shot_y
+  sec
+  sbc #SHOT_SPEED
+  sta shot_y
+  cmp #SHOT_MIN_Y
+  bcc shot_remove
+
+  sta SPRITE2_Y
+  rts
+
+shot_hit:
+  jsr destroy_alien
+  jsr deactivate_shot
+  rts
+
+shot_remove:
+  jsr deactivate_shot
+shot_done:
+  rts
+
+spawn_player_shot:
+  lda player_x_lo
+  sta shot_x_lo
+  lda player_x_hi
+  sta shot_x_hi
+  jsr store_shot_x
+
+  lda #SHOT_START_Y
+  sta shot_y
+  sta SPRITE2_Y
+
+  lda SPRITE_SPRITE_COLLISION
+
+  lda SPRITE_ENABLE
+  ora #%00000100
+  sta SPRITE_ENABLE
+
+  lda #$01
+  sta shot_active
+  rts
+
+deactivate_shot:
+  lda #$00
+  sta shot_active
+  sta shot_y
+
+  lda SPRITE_ENABLE
+  and #%11111011
+  sta SPRITE_ENABLE
+
+  lda SPRITE_X_MSB
+  and #%11111011
+  sta SPRITE_X_MSB
+  rts
+
+destroy_alien:
+  lda #$00
+  sta alien_alive
+
+  lda SPRITE_ENABLE
+  and #%11111110
+  sta SPRITE_ENABLE
+
+  lda #$04
+  sta hit_flash_timer
+  lda #HIT_FLASH_COLOR
+  sta BORDER_COLOR
   rts
 
 player_move_left:
@@ -338,6 +519,18 @@ player_store_x_done:
   sta SPRITE_X_MSB
   rts
 
+store_shot_x:
+  lda shot_x_lo
+  sta SPRITE2_X
+  lda SPRITE_X_MSB
+  and #%11111011
+  ldx shot_x_hi
+  beq shot_store_x_done
+  ora #%00000100
+shot_store_x_done:
+  sta SPRITE_X_MSB
+  rts
+
 alien_x_lo:
   .byte ALIEN_START_X_LO
 alien_x_hi:
@@ -346,13 +539,31 @@ alien_dir:
   .byte $01
 alien_frame:
   .byte $00
+alien_alive:
+  .byte $01
 player_x_lo:
   .byte PLAYER_START_X_LO
 player_x_hi:
   .byte PLAYER_START_X_HI
+shot_x_lo:
+  .byte $00
+shot_x_hi:
+  .byte $00
+shot_y:
+  .byte $00
+shot_active:
+  .byte $00
 effective_left:
   .byte $00
 effective_right:
+  .byte $00
+effective_fire:
+  .byte $00
+fire_locked:
+  .byte $00
+hit_flash_timer:
+  .byte $00
+joystick_state:
   .byte $00
 
 hud_row0:
@@ -408,4 +619,30 @@ player_sprite:
   .byte $18,$00,$18
   .byte $30,$00,$0c
   .byte $60,$00,$06
+  .byte $00
+
+* = $2080 "Shot Sprite"
+
+shot_sprite:
+  .byte $00,$ff,$00
+  .byte $00,$ff,$00
+  .byte $00,$ff,$00
+  .byte $00,$ff,$00
+  .byte $00,$ff,$00
+  .byte $00,$ff,$00
+  .byte $00,$ff,$00
+  .byte $00,$ff,$00
+  .byte $00,$00,$00
+  .byte $00,$00,$00
+  .byte $00,$00,$00
+  .byte $00,$00,$00
+  .byte $00,$00,$00
+  .byte $00,$00,$00
+  .byte $00,$00,$00
+  .byte $00,$00,$00
+  .byte $00,$00,$00
+  .byte $00,$00,$00
+  .byte $00,$00,$00
+  .byte $00,$00,$00
+  .byte $00,$00,$00
   .byte $00

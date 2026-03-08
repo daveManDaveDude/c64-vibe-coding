@@ -26,15 +26,20 @@ SPRITE0_X = 0xD000
 SPRITE0_Y = 0xD001
 SPRITE1_X = 0xD002
 SPRITE1_Y = 0xD003
+SPRITE2_X = 0xD004
+SPRITE2_Y = 0xD005
 SPRITE_X_MSB = 0xD010
 SPRITE_ENABLE = 0xD015
 JOYSTICK_PORT_2 = 0xDC00
 
 LEFT_KEY_CODE = 123
 RIGHT_KEY_CODE = 124
+FIRE_KEY_CODE = 49
 LEFT_MASK = 0x04
 RIGHT_MASK = 0x08
-EXPECTED_SPRITES = 0x03
+FIRE_MASK = 0x10
+INITIAL_EXPECTED_SPRITES = 0x03
+SHOT_SPRITE_MASK = 0x04
 
 
 class PlaytestFailure(Exception):
@@ -357,8 +362,10 @@ class Playtester:
                 f"!INCLUDE {default_keymap}",
                 "!UNDEF Left",
                 "!UNDEF Right",
+                "!UNDEF space",
                 "Left -1 4",
                 "Right -1 5",
+                "space -1 0",
                 "",
             ]
         )
@@ -436,6 +443,7 @@ class Playtester:
     def shutdown(self) -> None:
         self.gui.key_up(LEFT_KEY_CODE)
         self.gui.key_up(RIGHT_KEY_CODE)
+        self.gui.key_up(FIRE_KEY_CODE)
         if self.monitor is not None:
             self.monitor.quit_vice()
             self.monitor.close()
@@ -463,16 +471,23 @@ class Playtester:
             return vic_data[offset - SPRITE0_X]
 
         msb = vic(SPRITE_X_MSB)
+        sprite_enable = vic(SPRITE_ENABLE)
         state = {
             "player_x": combine_sprite_x(vic(SPRITE1_X), msb, 1),
             "player_y": vic(SPRITE1_Y),
             "alien_x": combine_sprite_x(vic(SPRITE0_X), msb, 0),
             "alien_y": vic(SPRITE0_Y),
-            "sprite_enable": vic(SPRITE_ENABLE),
+            "shot_x": combine_sprite_x(vic(SPRITE2_X), msb, 2),
+            "shot_y": vic(SPRITE2_Y),
+            "sprite_enable": sprite_enable,
             "sprite_x_msb": msb,
+            "alien_enabled": (sprite_enable & 0x01) != 0,
+            "player_enabled": (sprite_enable & 0x02) != 0,
+            "shot_enabled": (sprite_enable & SHOT_SPRITE_MASK) != 0,
             "joystick_port_2": joystick_value,
             "joystick_left_pressed": (joystick_value & LEFT_MASK) == 0,
             "joystick_right_pressed": (joystick_value & RIGHT_MASK) == 0,
+            "joystick_fire_pressed": (joystick_value & FIRE_MASK) == 0,
         }
         return state
 
@@ -509,7 +524,7 @@ class Playtester:
             self.resume_for(0.25)
             latest = self.read_state()
             if (
-                latest["sprite_enable"] & EXPECTED_SPRITES == EXPECTED_SPRITES
+                latest["sprite_enable"] & INITIAL_EXPECTED_SPRITES == INITIAL_EXPECTED_SPRITES
                 and latest["player_y"] > latest["alien_y"]
                 and latest["player_y"] >= 180
                 and latest["alien_y"] <= 100
@@ -605,6 +620,88 @@ class Playtester:
         bounce_state = self.alien_has_bounced()
         raise PlaytestFailure(f"alien_bounce_timeout: {bounce_state}")
 
+    def align_player_with_alien(self):
+        self.logger.log("Aligning the player ship under the alien before firing")
+        last_sample = None
+        for _ in range(40):
+            current = self.capture_sample("align-check")
+            last_sample = current
+            delta = current["player_x"] - current["alien_x"]
+            if abs(delta) <= 10:
+                self.record_step("player_aligned", "passed", current)
+                return current
+
+            key_code = LEFT_KEY_CODE if delta > 0 else RIGHT_KEY_CODE
+            self.gui.key_down(key_code)
+            try:
+                self.resume_for(0.2)
+            finally:
+                self.gui.key_up(key_code)
+
+        raise PlaytestFailure(f"player_alignment_timeout: {last_sample}")
+
+    def fire_once(self, attempt: int):
+        self.logger.log(f"Firing attempt {attempt}")
+        self.gui.key_down(FIRE_KEY_CODE)
+        try:
+            self.resume_for(0.12)
+            pressed = self.capture_sample(f"fire-{attempt}-press")
+            self.assert_true(
+                f"fire_{attempt}_joystick_active",
+                pressed["joystick_fire_pressed"],
+                pressed,
+            )
+            self.resume_for(0.12)
+            launched = self.capture_sample(f"fire-{attempt}-launch")
+            self.assert_true(
+                f"fire_{attempt}_shot_spawned",
+                launched["shot_enabled"] or not launched["alien_enabled"],
+                launched,
+            )
+            return launched
+        finally:
+            self.gui.key_up(FIRE_KEY_CODE)
+
+    def destroy_alien_with_shots(self):
+        attempts = []
+        for attempt in range(1, 5):
+            aligned = self.align_player_with_alien()
+            launch = self.fire_once(attempt)
+            attempt_detail = {
+                "attempt": attempt,
+                "aligned_sample": aligned,
+                "launch_sample": launch,
+                "shot_seen": launch["shot_enabled"],
+            }
+
+            if not launch["alien_enabled"]:
+                attempts.append(attempt_detail)
+                self.record_step("alien_destroyed", "passed", attempt_detail)
+                return attempt_detail
+
+            watch_sample = launch
+            for _ in range(16):
+                self.resume_for(0.2)
+                watch_sample = self.capture_sample(f"fire-{attempt}-watch")
+                attempt_detail["shot_seen"] = attempt_detail["shot_seen"] or watch_sample["shot_enabled"]
+                if not watch_sample["alien_enabled"]:
+                    attempt_detail["result"] = "hit"
+                    attempt_detail["final_sample"] = watch_sample
+                    attempts.append(attempt_detail)
+                    self.record_step("alien_destroyed", "passed", attempt_detail)
+                    return attempt_detail
+                if attempt_detail["shot_seen"] and not watch_sample["shot_enabled"]:
+                    attempt_detail["result"] = "miss"
+                    attempt_detail["final_sample"] = watch_sample
+                    break
+            else:
+                attempt_detail["result"] = "timeout"
+                attempt_detail["final_sample"] = watch_sample
+
+            attempts.append(attempt_detail)
+
+        raise PlaytestFailure(f"alien_destroy_timeout: {attempts}")
+
     def run(self):
         self.launch_vice()
         ready_state = self.wait_for_game_ready()
@@ -620,7 +717,7 @@ class Playtester:
         )
         self.assert_true(
             "initial_sprites_enabled",
-            initial["sprite_enable"] & EXPECTED_SPRITES == EXPECTED_SPRITES,
+            initial["sprite_enable"] & INITIAL_EXPECTED_SPRITES == INITIAL_EXPECTED_SPRITES,
             initial,
         )
         self.record_step("initial_state", "passed", initial)
@@ -648,6 +745,8 @@ class Playtester:
             bounce_state["positive_seen"] and bounce_state["negative_seen"],
             bounce_state,
         )
+
+        hit_state = self.destroy_alien_with_shots()
 
         captured_hashes = {
             sample["screenshot_sha256"]
@@ -685,6 +784,7 @@ class Playtester:
             "left_clamp_x": left_clamp["player_x"],
             "right_clamp_x": right_clamp["player_x"],
             "alien_direction_samples": bounce_state["deltas"],
+            "shot_attempts": hit_state["attempt"],
             "captured_frame_count": len(captured_hashes),
             "host_screenshots_enabled": self.host_capture_failure is None,
         }
