@@ -17,6 +17,7 @@ BasicUpstart2(start)
 .label SPRITE_X_EXPAND = $d01d
 .label SPRITE_Y_EXPAND = $d017
 .label JOYSTICK_PORT_2 = $dc00
+.label CPU_PORT = $01
 .label SPRITE0_X = $d000
 .label SPRITE0_Y = $d001
 .label SPRITE1_X = $d002
@@ -43,6 +44,9 @@ BasicUpstart2(start)
 .label SPRITE5_COLOR = $d02c
 .label SPRITE6_COLOR = $d02d
 .label SPRITE7_COLOR = $d02e
+.label SCREEN_PTR = $fb
+.label COLOR_PTR = $fd
+.label CHARSET_RAM = $3800
 
 .label HUD_TEXT_COLOR = $01
 .label PLAYFIELD_TEXT_COLOR = $0e
@@ -126,6 +130,20 @@ BasicUpstart2(start)
 .label DIVE_EXIT_Y = 246
 .label DIVE_ANIMATION_RATE = 4
 .label DIVE_ANIMATION_MAX_FRAME = 9
+.label DIVE_FIRE_HOLD_TICKS = 10
+.label ENEMY_BULLET_LIMIT = 2
+.label ENEMY_BULLET_CHAR_BASE = 64
+.label ENEMY_BULLET_COLOR = $01
+.label ENEMY_BULLET_SPEED = 2
+.label ENEMY_BULLET_START_X_OFFSET = 11
+.label ENEMY_BULLET_START_Y_OFFSET = 4
+.label ENEMY_BULLET_FIRE_COOLDOWN = 28
+.label ENEMY_BULLET_FIRE_MIN_Y = 104
+.label ENEMY_BULLET_FIRE_MAX_Y = 156
+.label ENEMY_BULLET_MAX_Y = 248
+.label PLAYER_RESPAWN_DELAY = 40
+.label PLAYER_HIT_MAX_Y = PLAYER_Y + 21
+.label PLAYER_HIT_RIGHT_OFFSET = 23
 
 * = $1000 "Main Program"
 
@@ -133,6 +151,7 @@ start:
   sei
   cld
   jsr init_vic
+  jsr init_charset
   jsr clear_screen
   jsr draw_hud
   jsr init_score
@@ -140,6 +159,7 @@ start:
   jsr init_player
   jsr init_shot
   jsr init_dive_attack
+  jsr init_enemy_fire
 
 main_loop:
   jsr wait_frame
@@ -148,6 +168,7 @@ main_loop:
   jsr update_shot
   jsr update_formation
   jsr update_dive_attack
+  jsr update_enemy_fire
   jmp main_loop
 
 init_vic:
@@ -160,13 +181,58 @@ init_vic:
   sta VIC_CTRL1
   lda #$08
   sta VIC_CTRL2
-  lda #$14
+  lda #$1e
   sta MEMORY_SETUP
 
   lda #$00
   sta BACKGROUND_COLOR
   lda #BORDER_BASE_COLOR
   sta BORDER_COLOR
+  rts
+
+init_charset:
+  lda CPU_PORT
+  sta cpu_port_backup
+  and #%11111011
+  sta CPU_PORT
+
+  ldx #$00
+copy_charset_loop:
+  lda $d000, x
+  sta CHARSET_RAM + $000, x
+  lda $d100, x
+  sta CHARSET_RAM + $100, x
+  lda $d200, x
+  sta CHARSET_RAM + $200, x
+  lda $d300, x
+  sta CHARSET_RAM + $300, x
+  lda $d400, x
+  sta CHARSET_RAM + $400, x
+  lda $d500, x
+  sta CHARSET_RAM + $500, x
+  lda $d600, x
+  sta CHARSET_RAM + $600, x
+  lda $d700, x
+  sta CHARSET_RAM + $700, x
+  inx
+  bne copy_charset_loop
+
+  lda cpu_port_backup
+  sta CPU_PORT
+
+  ldx #$00
+copy_enemy_bullet_charset_page0:
+  lda enemy_bullet_charset, x
+  sta CHARSET_RAM + (ENEMY_BULLET_CHAR_BASE * 8), x
+  inx
+  bne copy_enemy_bullet_charset_page0
+
+  ldx #$00
+copy_enemy_bullet_charset_page1:
+  lda enemy_bullet_charset + $100, x
+  sta CHARSET_RAM + (ENEMY_BULLET_CHAR_BASE * 8) + $100, x
+  inx
+  bne copy_enemy_bullet_charset_page1
   rts
 
 clear_screen:
@@ -333,6 +399,7 @@ init_dive_attack:
   sta dive_anim_tick
   sta dive_sprite_pointer
   sta dive_sprite_color
+  sta dive_fire_hold_timer
   sta dive_x_lo
   sta dive_x_hi
   sta dive_y
@@ -342,6 +409,27 @@ init_dive_attack:
 
   lda #DIVE_START_DELAY
   sta dive_delay
+  rts
+
+init_enemy_fire:
+  ldx #$00
+init_enemy_fire_loop:
+  lda #$00
+  sta enemy_bullet_active, x
+  sta enemy_bullet_x_lo, x
+  sta enemy_bullet_x_hi, x
+  sta enemy_bullet_y, x
+  inx
+  cpx #ENEMY_BULLET_LIMIT
+  bcc init_enemy_fire_loop
+
+  lda #$00
+  sta enemy_fire_cooldown
+  sta player_respawn_timer
+  sta player_right_lo
+  sta player_right_hi
+  sta enemy_bullet_row
+  sta enemy_bullet_col
   rts
 
 wait_frame:
@@ -514,8 +602,15 @@ dive_phase1_update:
   jmp dive_store_position
 
 dive_phase2_update:
+  lda dive_fire_hold_timer
+  beq dive_phase2_track_player
+  dec dive_fire_hold_timer
+  jmp dive_phase2_move_down
+
+dive_phase2_track_player:
   jsr steer_dive_toward_player
   jsr steer_dive_toward_player
+dive_phase2_move_down:
   lda dive_y
   clc
   adc #$03
@@ -537,6 +632,7 @@ finish_dive_return:
   sta dive_timer
   sta dive_anim_frame
   sta dive_anim_tick
+  sta dive_fire_hold_timer
 
   lda #DIVE_SLOT_NONE
   sta dive_slot
@@ -707,6 +803,7 @@ begin_dive:
   sta dive_phase
   sta dive_anim_frame
   sta dive_anim_tick
+  sta dive_fire_hold_timer
   lda #DIVE_PHASE0_TICKS
   sta dive_timer
   lda #DIVE_START_DELAY
@@ -1036,7 +1133,314 @@ restore_dive_slot5_y:
   sta SPRITE7_Y
   rts
 
+update_enemy_fire:
+  jsr erase_enemy_bullets
+
+  ldx #$00
+update_enemy_fire_loop:
+  lda enemy_bullet_active, x
+  beq update_enemy_fire_next
+
+  lda enemy_bullet_y, x
+  clc
+  adc #ENEMY_BULLET_SPEED
+  sta enemy_bullet_y, x
+  cmp #ENEMY_BULLET_MAX_Y
+  bcs deactivate_enemy_bullet
+
+  jsr enemy_bullet_hits_player
+  bcc update_enemy_fire_next
+  jsr handle_player_hit
+  rts
+
+deactivate_enemy_bullet:
+  lda #$00
+  sta enemy_bullet_active, x
+
+update_enemy_fire_next:
+  inx
+  cpx #ENEMY_BULLET_LIMIT
+  bcc update_enemy_fire_loop
+
+  jsr try_spawn_enemy_bullet
+  jsr draw_enemy_bullets
+  rts
+
+try_spawn_enemy_bullet:
+  lda player_respawn_timer
+  bne try_spawn_enemy_bullet_done
+
+  lda enemy_fire_cooldown
+  beq enemy_fire_ready
+  dec enemy_fire_cooldown
+  rts
+
+enemy_fire_ready:
+  lda dive_active
+  beq try_spawn_enemy_bullet_done
+  lda dive_phase
+  cmp #$01
+  bcc try_spawn_enemy_bullet_done
+  lda dive_y
+  cmp #ENEMY_BULLET_FIRE_MIN_Y
+  bcc try_spawn_enemy_bullet_done
+  cmp #ENEMY_BULLET_FIRE_MAX_Y
+  bcs try_spawn_enemy_bullet_done
+
+  jsr find_free_enemy_bullet_slot
+  bcc try_spawn_enemy_bullet_done
+
+  lda dive_x_lo
+  clc
+  adc #ENEMY_BULLET_START_X_OFFSET
+  sta enemy_bullet_x_lo, x
+  lda dive_x_hi
+  adc #$00
+  sta enemy_bullet_x_hi, x
+
+  lda dive_y
+  clc
+  adc #ENEMY_BULLET_START_Y_OFFSET
+  sta enemy_bullet_y, x
+
+  lda #$01
+  sta enemy_bullet_active, x
+  lda #ENEMY_BULLET_FIRE_COOLDOWN
+  sta enemy_fire_cooldown
+  lda #DIVE_FIRE_HOLD_TICKS
+  sta dive_fire_hold_timer
+
+try_spawn_enemy_bullet_done:
+  rts
+
+find_free_enemy_bullet_slot:
+  ldx #$00
+find_free_enemy_bullet_slot_loop:
+  lda enemy_bullet_active, x
+  beq find_free_enemy_bullet_slot_found
+  inx
+  cpx #ENEMY_BULLET_LIMIT
+  bcc find_free_enemy_bullet_slot_loop
+  clc
+  rts
+
+find_free_enemy_bullet_slot_found:
+  sec
+  rts
+
+erase_enemy_bullets:
+  ldx #$00
+erase_enemy_bullets_loop:
+  lda enemy_bullet_active, x
+  beq erase_enemy_bullets_next
+  jsr erase_enemy_bullet_cell
+erase_enemy_bullets_next:
+  inx
+  cpx #ENEMY_BULLET_LIMIT
+  bcc erase_enemy_bullets_loop
+  rts
+
+draw_enemy_bullets:
+  ldx #$00
+draw_enemy_bullets_loop:
+  lda enemy_bullet_active, x
+  beq draw_enemy_bullets_next
+  jsr draw_enemy_bullet_cell
+draw_enemy_bullets_next:
+  inx
+  cpx #ENEMY_BULLET_LIMIT
+  bcc draw_enemy_bullets_loop
+  rts
+
+clear_enemy_bullets:
+  jsr erase_enemy_bullets
+
+  ldx #$00
+clear_enemy_bullets_loop:
+  lda #$00
+  sta enemy_bullet_active, x
+  sta enemy_bullet_x_lo, x
+  sta enemy_bullet_x_hi, x
+  sta enemy_bullet_y, x
+  inx
+  cpx #ENEMY_BULLET_LIMIT
+  bcc clear_enemy_bullets_loop
+
+  lda #ENEMY_BULLET_FIRE_COOLDOWN
+  sta enemy_fire_cooldown
+  rts
+
+draw_enemy_bullet_cell:
+  jsr compute_enemy_bullet_cell
+  ldy enemy_bullet_row
+  lda screen_row_lo, y
+  sta SCREEN_PTR
+  lda screen_row_hi, y
+  sta SCREEN_PTR + 1
+  ldy enemy_bullet_col
+  lda enemy_bullet_char
+  sta (SCREEN_PTR), y
+
+  ldy enemy_bullet_row
+  lda color_row_lo, y
+  sta COLOR_PTR
+  lda color_row_hi, y
+  sta COLOR_PTR + 1
+  ldy enemy_bullet_col
+  lda #ENEMY_BULLET_COLOR
+  sta (COLOR_PTR), y
+  rts
+
+erase_enemy_bullet_cell:
+  jsr compute_enemy_bullet_cell
+  ldy enemy_bullet_row
+  lda screen_row_lo, y
+  sta SCREEN_PTR
+  lda screen_row_hi, y
+  sta SCREEN_PTR + 1
+  ldy enemy_bullet_col
+  lda #$20
+  sta (SCREEN_PTR), y
+
+  ldy enemy_bullet_row
+  lda color_row_lo, y
+  sta COLOR_PTR
+  lda color_row_hi, y
+  sta COLOR_PTR + 1
+  ldy enemy_bullet_col
+  lda #PLAYFIELD_TEXT_COLOR
+  sta (COLOR_PTR), y
+  rts
+
+compute_enemy_bullet_cell:
+  lda enemy_bullet_y, x
+  and #%00000111
+  asl
+  asl
+  asl
+  sta enemy_bullet_char
+
+  lda enemy_bullet_x_lo, x
+  and #%00000111
+  clc
+  adc enemy_bullet_char
+  clc
+  adc #ENEMY_BULLET_CHAR_BASE
+  sta enemy_bullet_char
+
+  lda enemy_bullet_y, x
+  lsr
+  lsr
+  lsr
+  sta enemy_bullet_row
+
+  lda enemy_bullet_x_lo, x
+  lsr
+  lsr
+  lsr
+  sta enemy_bullet_col
+
+  lda enemy_bullet_x_hi, x
+  beq enemy_bullet_col_done
+  lda enemy_bullet_col
+  clc
+  adc #32
+  sta enemy_bullet_col
+enemy_bullet_col_done:
+  rts
+
+enemy_bullet_hits_player:
+  lda player_respawn_timer
+  bne enemy_bullet_miss
+
+  lda enemy_bullet_y, x
+  cmp #PLAYER_Y
+  bcc enemy_bullet_miss
+  cmp #PLAYER_HIT_MAX_Y
+  bcs enemy_bullet_miss
+
+  lda enemy_bullet_x_hi, x
+  cmp player_x_hi
+  bcc enemy_bullet_miss
+  bne enemy_bullet_check_right
+  lda enemy_bullet_x_lo, x
+  cmp player_x_lo
+  bcc enemy_bullet_miss
+
+enemy_bullet_check_right:
+  lda player_x_lo
+  clc
+  adc #PLAYER_HIT_RIGHT_OFFSET
+  sta player_right_lo
+  lda player_x_hi
+  adc #$00
+  sta player_right_hi
+
+  lda player_right_hi
+  cmp enemy_bullet_x_hi, x
+  bcc enemy_bullet_miss
+  bne enemy_bullet_hit
+  lda player_right_lo
+  cmp enemy_bullet_x_lo, x
+  bcc enemy_bullet_miss
+
+enemy_bullet_hit:
+  sec
+  rts
+
+enemy_bullet_miss:
+  clc
+  rts
+
+handle_player_hit:
+  lda player_respawn_timer
+  bne handle_player_hit_done
+
+  jsr deactivate_shot
+  jsr clear_enemy_bullets
+
+  lda #PLAYER_RESPAWN_DELAY
+  sta player_respawn_timer
+
+  lda #$00
+  sta effective_left
+  sta effective_right
+  sta effective_fire
+  sta fire_locked
+
+  lda SPRITE_ENABLE
+  and #%11111101
+  sta SPRITE_ENABLE
+
+  jsr start_hit_flash
+handle_player_hit_done:
+  rts
+
+respawn_player:
+  lda #PLAYER_START_X_LO
+  sta player_x_lo
+  lda #PLAYER_START_X_HI
+  sta player_x_hi
+  jsr store_player_x
+
+  lda SPRITE_ENABLE
+  ora #%00000010
+  sta SPRITE_ENABLE
+
+  lda #ENEMY_BULLET_FIRE_COOLDOWN
+  sta enemy_fire_cooldown
+  rts
+
 update_player:
+  lda player_respawn_timer
+  beq update_player_controls
+  dec player_respawn_timer
+  bne update_player_done
+  jsr respawn_player
+update_player_done:
+  rts
+
+update_player_controls:
   jsr read_player_input
   lda effective_left
   bne player_move_left_update
@@ -1479,6 +1883,7 @@ clear_dive_if_slot:
   sta dive_active
   sta dive_phase
   sta dive_timer
+  sta dive_fire_hold_timer
 
   lda #DIVE_SLOT_NONE
   sta dive_slot
@@ -1761,6 +2166,8 @@ dive_sprite_pointer:
   .byte $00
 dive_sprite_color:
   .byte $00
+dive_fire_hold_timer:
+  .byte $00
 dive_x_lo:
   .byte $00
 dive_x_hi:
@@ -1809,6 +2216,30 @@ shot_right_lo:
   .byte $00
 shot_right_hi:
   .byte $00
+enemy_bullet_active:
+  .fill ENEMY_BULLET_LIMIT, $00
+enemy_bullet_x_lo:
+  .fill ENEMY_BULLET_LIMIT, $00
+enemy_bullet_x_hi:
+  .fill ENEMY_BULLET_LIMIT, $00
+enemy_bullet_y:
+  .fill ENEMY_BULLET_LIMIT, $00
+enemy_fire_cooldown:
+  .byte $00
+player_respawn_timer:
+  .byte $00
+player_right_lo:
+  .byte $00
+player_right_hi:
+  .byte $00
+enemy_bullet_row:
+  .byte $00
+enemy_bullet_col:
+  .byte $00
+enemy_bullet_char:
+  .byte $00
+cpu_port_backup:
+  .byte $00
 score_total_lo:
   .byte $00
 score_total_mid:
@@ -1843,6 +2274,22 @@ grunt_dive_animation_sequence:
   .byte GRUNT_SPRITE2_PTR,$9b,$9c,$9d,$9e,$9f,$a0,$a1,$a2,$a3
 grunt_dive_animation_colors:
   .byte GRUNT_COLOR,GRUNT_DIVE_COLOR,GRUNT_DIVE_COLOR,GRUNT_DIVE_COLOR,GRUNT_DIVE_COLOR,GRUNT_DIVE_COLOR,GRUNT_DIVE_COLOR,GRUNT_DIVE_COLOR,GRUNT_DIVE_COLOR,GRUNT_DIVE_COLOR
+screen_row_lo:
+  .for (var row = 0; row < 25; row++) {
+    .byte <(SCREEN_RAM + (row * 40))
+  }
+screen_row_hi:
+  .for (var row = 0; row < 25; row++) {
+    .byte >(SCREEN_RAM + (row * 40))
+  }
+color_row_lo:
+  .for (var row = 0; row < 25; row++) {
+    .byte <(COLOR_RAM + (row * 40))
+  }
+color_row_hi:
+  .for (var row = 0; row < 25; row++) {
+    .byte >(COLOR_RAM + (row * 40))
+  }
 
 * = $2000 "Arcade Sprites"
 
@@ -1883,6 +2330,21 @@ shot_sprite:
   .byte $00,$ff,$00
   .byte $00,$ff,$00
   .byte $00,$ff,$00
+
+* = $3080 "Enemy Bullet Charset Data"
+
+enemy_bullet_charset:
+  .for (var sy = 0; sy < 8; sy++) {
+    .for (var sx = 0; sx < 8; sx++) {
+      .for (var row = 0; row < 8; row++) {
+        .if (row >= sy && row <= sy + 3 && row < 8) {
+          .byte (192 >> sx)
+        } else {
+          .byte $00
+        }
+      }
+    }
+  }
   .byte $00,$ff,$00
   .byte $00,$ff,$00
   .byte $00,$00,$00
