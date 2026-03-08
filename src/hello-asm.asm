@@ -16,31 +16,40 @@ BasicUpstart2(start)
 .label SPRITE_MULTICOLOR = $d01c
 .label SPRITE_X_EXPAND = $d01d
 .label SPRITE_Y_EXPAND = $d017
-.label SPRITE_SPRITE_COLLISION = $d01e
 .label JOYSTICK_PORT_2 = $dc00
 .label SPRITE0_X = $d000
 .label SPRITE0_Y = $d001
-.label SPRITE0_COLOR = $d027
 .label SPRITE1_X = $d002
 .label SPRITE1_Y = $d003
-.label SPRITE1_COLOR = $d028
 .label SPRITE2_X = $d004
 .label SPRITE2_Y = $d005
+.label SPRITE3_X = $d006
+.label SPRITE3_Y = $d007
+.label SPRITE4_X = $d008
+.label SPRITE4_Y = $d009
+.label SPRITE0_COLOR = $d027
+.label SPRITE1_COLOR = $d028
 .label SPRITE2_COLOR = $d029
+.label SPRITE3_COLOR = $d02a
+.label SPRITE4_COLOR = $d02b
 
 .label HUD_TEXT_COLOR = $01
 .label PLAYFIELD_TEXT_COLOR = $0e
-.label ALIEN_COLOR = $05
+.label FORMATION_COLOR = $05
 .label HIT_FLASH_COLOR = $01
 .label BORDER_BASE_COLOR = $06
-.label ALIEN_START_X_LO = $18
-.label ALIEN_START_X_HI = $00
-.label ALIEN_Y = 60
-.label ALIEN_MIN_X_LO = $18
-.label ALIEN_MIN_X_HI = $00
-.label ALIEN_MAX_X_LO = $40
-.label ALIEN_MAX_X_HI = $01
-.label ALIEN_SPRITE_PTR = $80
+.label FORMATION_START_X = $30
+.label FORMATION_Y = 60
+.label FORMATION_MIN_X = $18
+.label FORMATION_MAX_X = $e8
+.label FORMATION_SLOT1_OFFSET = 32
+.label FORMATION_SLOT2_OFFSET = 64
+.label FORMATION_SPRITE_PTR = $80
+.label FORMATION_SLOT0_MASK = %00000001
+.label FORMATION_SLOT1_MASK = %00001000
+.label FORMATION_SLOT2_MASK = %00010000
+.label FORMATION_SPRITE_MASK = %00011001
+.label FORMATION_MSB_CLEAR_MASK = %11100110
 .label PLAYER_COLOR = $0f
 .label PLAYER_START_X_LO = $a8
 .label PLAYER_START_X_HI = $00
@@ -55,6 +64,9 @@ BasicUpstart2(start)
 .label SHOT_START_Y = PLAYER_Y - 12
 .label SHOT_SPEED = 10
 .label SHOT_MIN_Y = 16
+.label SHOT_HIT_LEFT_OFFSET = 8
+.label SHOT_HIT_RIGHT_OFFSET = 15
+.label SHOT_HIT_BOTTOM_OFFSET = 7
 .label FIRE_MASK = %00010000
 
 * = $1000 "Main Program"
@@ -64,7 +76,7 @@ start:
   jsr init_vic
   jsr clear_screen
   jsr draw_hud
-  jsr init_alien
+  jsr init_formation
   jsr init_player
   jsr init_shot
 
@@ -73,7 +85,7 @@ main_loop:
   jsr update_effects
   jsr update_player
   jsr update_shot
-  jsr update_alien
+  jsr update_formation
   jmp main_loop
 
 init_vic:
@@ -127,35 +139,42 @@ hud_loop:
 hud_done:
   rts
 
-init_alien:
-  lda #ALIEN_SPRITE_PTR
+init_formation:
+  lda #FORMATION_SPRITE_PTR
   sta SPRITE_POINTERS
+  sta SPRITE_POINTERS + 3
+  sta SPRITE_POINTERS + 4
 
-  lda #ALIEN_START_X_LO
-  sta alien_x_lo
-  lda #ALIEN_START_X_HI
-  sta alien_x_hi
-  jsr store_alien_x
+  lda #FORMATION_START_X
+  sta formation_x
 
-  lda #ALIEN_Y
+  lda #FORMATION_Y
   sta SPRITE0_Y
+  sta SPRITE3_Y
+  sta SPRITE4_Y
 
   lda #$01
-  sta alien_dir
-  sta alien_alive
+  sta formation_dir
+  sta formation_slot0_alive
+  sta formation_slot1_alive
+  sta formation_slot2_alive
 
   lda #$00
-  sta alien_frame
+  sta formation_frame
   sta SPRITE_X_MSB
   sta SPRITE_PRIORITY
   sta SPRITE_MULTICOLOR
   sta SPRITE_X_EXPAND
   sta SPRITE_Y_EXPAND
 
-  lda #ALIEN_COLOR
+  lda #FORMATION_COLOR
   sta SPRITE0_COLOR
+  sta SPRITE3_COLOR
+  sta SPRITE4_COLOR
 
-  lda #$01
+  jsr store_formation_x
+
+  lda #FORMATION_SPRITE_MASK
   sta SPRITE_ENABLE
   rts
 
@@ -195,6 +214,14 @@ init_shot:
   sta effective_fire
   sta fire_locked
   sta hit_flash_timer
+  sta target_x_lo
+  sta target_x_hi
+  sta target_right_lo
+  sta target_right_hi
+  sta shot_left_lo
+  sta shot_left_hi
+  sta shot_right_lo
+  sta shot_right_hi
 
   lda SPRITE_ENABLE
   and #%11111011
@@ -203,8 +230,6 @@ init_shot:
   lda SPRITE_X_MSB
   and #%11111011
   sta SPRITE_X_MSB
-
-  lda SPRITE_SPRITE_COLLISION
   rts
 
 wait_frame:
@@ -233,69 +258,46 @@ update_effects:
 effects_done:
   rts
 
-update_alien:
-  lda alien_alive
-  beq alien_done
-
-  inc alien_frame
-  lda alien_frame
+update_formation:
+  inc formation_frame
+  lda formation_frame
   and #$01
-  bne alien_done
+  bne formation_done
 
-  lda alien_dir
-  bpl alien_move_right
+  lda formation_dir
+  bpl formation_move_right
 
-alien_move_left:
-  lda alien_x_lo
-  bne alien_dec_low
-  dec alien_x_hi
-alien_dec_low:
-  dec alien_x_lo
+formation_move_left:
+  dec formation_x
+  lda formation_x
+  cmp #FORMATION_MIN_X
+  bcs formation_store_x
 
-  lda alien_x_hi
-  cmp #ALIEN_MIN_X_HI
-  bcc alien_clamp_min
-  bne alien_store_x
-  lda alien_x_lo
-  cmp #ALIEN_MIN_X_LO
-  bcc alien_clamp_min
-  jmp alien_store_x
-
-alien_clamp_min:
-  lda #ALIEN_MIN_X_LO
-  sta alien_x_lo
-  lda #ALIEN_MIN_X_HI
-  sta alien_x_hi
+formation_clamp_min:
+  lda #FORMATION_MIN_X
+  sta formation_x
   lda #$01
-  sta alien_dir
-  jmp alien_store_x
+  sta formation_dir
+  jmp formation_store_x
 
-alien_move_right:
-  inc alien_x_lo
-  bne alien_check_max
-  inc alien_x_hi
+formation_move_right:
+  inc formation_x
+  lda formation_x
+  cmp #FORMATION_MAX_X
+  bcc formation_store_x
+  beq formation_clamp_max
+  bcs formation_clamp_max
 
-alien_check_max:
-  lda alien_x_hi
-  cmp #ALIEN_MAX_X_HI
-  bcc alien_store_x
-  bne alien_clamp_max
-  lda alien_x_lo
-  cmp #ALIEN_MAX_X_LO
-  bcc alien_store_x
-
-alien_clamp_max:
-  lda #ALIEN_MAX_X_LO
-  sta alien_x_lo
-  lda #ALIEN_MAX_X_HI
-  sta alien_x_hi
+formation_clamp_max:
+  lda #FORMATION_MAX_X
+  sta formation_x
   lda #$ff
-  sta alien_dir
+  sta formation_dir
 
-alien_store_x:
-  jsr store_alien_x
+formation_store_x:
+  jsr store_formation_x
 
-alien_done:
+formation_done:
   rts
 
 update_player:
@@ -374,11 +376,12 @@ update_shot:
   lda shot_active
   beq shot_done
 
-  lda SPRITE_SPRITE_COLLISION
-  and #%00000101
-  cmp #%00000101
-  beq shot_hit
+  jsr check_shot_collision
+  bcc shot_continue
+  jsr deactivate_shot
+  rts
 
+shot_continue:
   lda shot_y
   sec
   sbc #SHOT_SPEED
@@ -389,14 +392,111 @@ update_shot:
   sta SPRITE2_Y
   rts
 
-shot_hit:
-  jsr destroy_alien
-  jsr deactivate_shot
-  rts
-
 shot_remove:
   jsr deactivate_shot
 shot_done:
+  rts
+
+check_shot_collision:
+  lda formation_slot0_alive
+  beq check_slot1
+  lda formation_slot0_x_lo
+  sta target_x_lo
+  lda formation_slot0_x_hi
+  sta target_x_hi
+  jsr shot_hits_target
+  bcc check_slot1
+  jsr destroy_slot0
+  sec
+  rts
+
+check_slot1:
+  lda formation_slot1_alive
+  beq check_slot2
+  lda formation_slot1_x_lo
+  sta target_x_lo
+  lda formation_slot1_x_hi
+  sta target_x_hi
+  jsr shot_hits_target
+  bcc check_slot2
+  jsr destroy_slot1
+  sec
+  rts
+
+check_slot2:
+  lda formation_slot2_alive
+  beq no_shot_hit
+  lda formation_slot2_x_lo
+  sta target_x_lo
+  lda formation_slot2_x_hi
+  sta target_x_hi
+  jsr shot_hits_target
+  bcc no_shot_hit
+  jsr destroy_slot2
+  sec
+  rts
+
+no_shot_hit:
+  clc
+  rts
+
+shot_hits_target:
+  lda shot_y
+  cmp #FORMATION_Y + 21
+  bcs target_miss
+
+  clc
+  adc #SHOT_HIT_BOTTOM_OFFSET
+  cmp #FORMATION_Y
+  bcc target_miss
+
+  lda shot_x_lo
+  clc
+  adc #SHOT_HIT_LEFT_OFFSET
+  sta shot_left_lo
+  lda shot_x_hi
+  adc #$00
+  sta shot_left_hi
+
+  lda shot_x_lo
+  clc
+  adc #SHOT_HIT_RIGHT_OFFSET
+  sta shot_right_lo
+  lda shot_x_hi
+  adc #$00
+  sta shot_right_hi
+
+  lda shot_right_hi
+  cmp target_x_hi
+  bcc target_miss
+  bne check_target_right_edge
+  lda shot_right_lo
+  cmp target_x_lo
+  bcc target_miss
+
+check_target_right_edge:
+  lda target_x_lo
+  clc
+  adc #23
+  sta target_right_lo
+  lda target_x_hi
+  adc #$00
+  sta target_right_hi
+
+  lda target_right_hi
+  cmp shot_left_hi
+  bcc target_miss
+  bne target_hit
+  lda target_right_lo
+  cmp shot_left_lo
+  bcc target_miss
+
+target_hit:
+  sec
+  rts
+
+target_miss:
+  clc
   rts
 
 spawn_player_shot:
@@ -409,8 +509,6 @@ spawn_player_shot:
   lda #SHOT_START_Y
   sta shot_y
   sta SPRITE2_Y
-
-  lda SPRITE_SPRITE_COLLISION
 
   lda SPRITE_ENABLE
   ora #%00000100
@@ -434,14 +532,30 @@ deactivate_shot:
   sta SPRITE_X_MSB
   rts
 
-destroy_alien:
+destroy_slot0:
   lda #$00
-  sta alien_alive
-
+  sta formation_slot0_alive
   lda SPRITE_ENABLE
   and #%11111110
   sta SPRITE_ENABLE
+  jmp start_hit_flash
 
+destroy_slot1:
+  lda #$00
+  sta formation_slot1_alive
+  lda SPRITE_ENABLE
+  and #%11110111
+  sta SPRITE_ENABLE
+  jmp start_hit_flash
+
+destroy_slot2:
+  lda #$00
+  sta formation_slot2_alive
+  lda SPRITE_ENABLE
+  and #%11101111
+  sta SPRITE_ENABLE
+
+start_hit_flash:
   lda #$04
   sta hit_flash_timer
   lda #HIT_FLASH_COLOR
@@ -495,15 +609,45 @@ player_store_x:
   jsr store_player_x
   rts
 
-store_alien_x:
-  lda alien_x_lo
+store_formation_x:
+  lda formation_x
+  sta formation_slot0_x_lo
   sta SPRITE0_X
+  lda #$00
+  sta formation_slot0_x_hi
+
+  lda formation_x
+  clc
+  adc #FORMATION_SLOT1_OFFSET
+  sta formation_slot1_x_lo
+  sta SPRITE3_X
+  lda #$00
+  adc #$00
+  sta formation_slot1_x_hi
+
+  lda formation_x
+  clc
+  adc #FORMATION_SLOT2_OFFSET
+  sta formation_slot2_x_lo
+  sta SPRITE4_X
+  lda #$00
+  adc #$00
+  sta formation_slot2_x_hi
+
   lda SPRITE_X_MSB
-  and #%11111110
-  ldx alien_x_hi
-  beq alien_store_x_done
-  ora #%00000001
-alien_store_x_done:
+  and #FORMATION_MSB_CLEAR_MASK
+  ldx formation_slot0_x_hi
+  beq formation_slot0_msb_done
+  ora #FORMATION_SLOT0_MASK
+formation_slot0_msb_done:
+  ldx formation_slot1_x_hi
+  beq formation_slot1_msb_done
+  ora #FORMATION_SLOT1_MASK
+formation_slot1_msb_done:
+  ldx formation_slot2_x_hi
+  beq formation_slot2_msb_done
+  ora #FORMATION_SLOT2_MASK
+formation_slot2_msb_done:
   sta SPRITE_X_MSB
   rts
 
@@ -531,15 +675,29 @@ shot_store_x_done:
   sta SPRITE_X_MSB
   rts
 
-alien_x_lo:
-  .byte ALIEN_START_X_LO
-alien_x_hi:
-  .byte ALIEN_START_X_HI
-alien_dir:
+formation_x:
+  .byte FORMATION_START_X
+formation_dir:
   .byte $01
-alien_frame:
+formation_frame:
   .byte $00
-alien_alive:
+formation_slot0_x_lo:
+  .byte FORMATION_START_X
+formation_slot0_x_hi:
+  .byte $00
+formation_slot1_x_lo:
+  .byte FORMATION_START_X + FORMATION_SLOT1_OFFSET
+formation_slot1_x_hi:
+  .byte $00
+formation_slot2_x_lo:
+  .byte FORMATION_START_X + FORMATION_SLOT2_OFFSET
+formation_slot2_x_hi:
+  .byte $00
+formation_slot0_alive:
+  .byte $01
+formation_slot1_alive:
+  .byte $01
+formation_slot2_alive:
   .byte $01
 player_x_lo:
   .byte PLAYER_START_X_LO
@@ -564,6 +722,22 @@ fire_locked:
 hit_flash_timer:
   .byte $00
 joystick_state:
+  .byte $00
+target_x_lo:
+  .byte $00
+target_x_hi:
+  .byte $00
+target_right_lo:
+  .byte $00
+target_right_hi:
+  .byte $00
+shot_left_lo:
+  .byte $00
+shot_left_hi:
+  .byte $00
+shot_right_lo:
+  .byte $00
+shot_right_hi:
   .byte $00
 
 hud_row0:

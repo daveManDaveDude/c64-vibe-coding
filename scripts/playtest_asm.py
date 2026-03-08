@@ -28,6 +28,10 @@ SPRITE1_X = 0xD002
 SPRITE1_Y = 0xD003
 SPRITE2_X = 0xD004
 SPRITE2_Y = 0xD005
+SPRITE3_X = 0xD006
+SPRITE3_Y = 0xD007
+SPRITE4_X = 0xD008
+SPRITE4_Y = 0xD009
 SPRITE_X_MSB = 0xD010
 SPRITE_ENABLE = 0xD015
 JOYSTICK_PORT_2 = 0xDC00
@@ -38,7 +42,9 @@ FIRE_KEY_CODE = 49
 LEFT_MASK = 0x04
 RIGHT_MASK = 0x08
 FIRE_MASK = 0x10
-INITIAL_EXPECTED_SPRITES = 0x03
+FORMATION_SPRITES_MASK = 0x19
+PLAYER_SPRITE_MASK = 0x02
+INITIAL_EXPECTED_SPRITES = FORMATION_SPRITES_MASK | PLAYER_SPRITE_MASK
 SHOT_SPRITE_MASK = 0x04
 
 
@@ -475,15 +481,19 @@ class Playtester:
         state = {
             "player_x": combine_sprite_x(vic(SPRITE1_X), msb, 1),
             "player_y": vic(SPRITE1_Y),
-            "alien_x": combine_sprite_x(vic(SPRITE0_X), msb, 0),
-            "alien_y": vic(SPRITE0_Y),
+            "formation_0_x": combine_sprite_x(vic(SPRITE0_X), msb, 0),
+            "formation_1_x": combine_sprite_x(vic(SPRITE3_X), msb, 3),
+            "formation_2_x": combine_sprite_x(vic(SPRITE4_X), msb, 4),
+            "formation_y": vic(SPRITE0_Y),
             "shot_x": combine_sprite_x(vic(SPRITE2_X), msb, 2),
             "shot_y": vic(SPRITE2_Y),
             "sprite_enable": sprite_enable,
             "sprite_x_msb": msb,
-            "alien_enabled": (sprite_enable & 0x01) != 0,
             "player_enabled": (sprite_enable & 0x02) != 0,
             "shot_enabled": (sprite_enable & SHOT_SPRITE_MASK) != 0,
+            "formation_0_enabled": (sprite_enable & 0x01) != 0,
+            "formation_1_enabled": (sprite_enable & 0x08) != 0,
+            "formation_2_enabled": (sprite_enable & 0x10) != 0,
             "joystick_port_2": joystick_value,
             "joystick_left_pressed": (joystick_value & LEFT_MASK) == 0,
             "joystick_right_pressed": (joystick_value & RIGHT_MASK) == 0,
@@ -525,9 +535,9 @@ class Playtester:
             latest = self.read_state()
             if (
                 latest["sprite_enable"] & INITIAL_EXPECTED_SPRITES == INITIAL_EXPECTED_SPRITES
-                and latest["player_y"] > latest["alien_y"]
+                and latest["player_y"] > latest["formation_y"]
                 and latest["player_y"] >= 180
-                and latest["alien_y"] <= 100
+                and latest["formation_y"] <= 100
             ):
                 return latest
         raise PlaytestFailure(f"Timed out waiting for the game shell to appear: {latest}")
@@ -594,11 +604,47 @@ class Playtester:
         )
         self.record_step(f"{stage_name}_idle", "passed", {"idle_one": idle_one, "idle_two": idle_two})
 
-    def alien_has_bounced(self):
-        alien_positions = [sample["alien_x"] for sample in self.samples]
+    def formation_slots(self, sample):
+        return [
+            {
+                "index": 0,
+                "x": sample["formation_0_x"],
+                "enabled": sample["formation_0_enabled"],
+            },
+            {
+                "index": 1,
+                "x": sample["formation_1_x"],
+                "enabled": sample["formation_1_enabled"],
+            },
+            {
+                "index": 2,
+                "x": sample["formation_2_x"],
+                "enabled": sample["formation_2_enabled"],
+            },
+        ]
+
+    def live_formation_slots(self, sample):
+        return [slot for slot in self.formation_slots(sample) if slot["enabled"]]
+
+    def formation_alive_count(self, sample):
+        return len(self.live_formation_slots(sample))
+
+    def leftmost_formation_x(self, sample):
+        live_slots = self.live_formation_slots(sample)
+        if not live_slots:
+            return None
+        return min(slot["x"] for slot in live_slots)
+
+    def formation_has_bounced(self):
+        formation_positions = []
+        for sample in self.samples:
+            leftmost_x = self.leftmost_formation_x(sample)
+            if leftmost_x is not None:
+                formation_positions.append(leftmost_x)
+
         deltas = [
             current - previous
-            for previous, current in zip(alien_positions, alien_positions[1:])
+            for previous, current in zip(formation_positions, formation_positions[1:])
             if current != previous
         ]
         return {
@@ -608,28 +654,39 @@ class Playtester:
             "deltas": deltas,
         }
 
-    def wait_for_alien_bounce(self):
-        self.logger.log("Observing alien movement until a visible bounce is sampled")
+    def wait_for_formation_bounce(self):
+        self.logger.log("Observing formation movement until a visible bounce is sampled")
         for _ in range(12):
-            bounce_state = self.alien_has_bounced()
+            bounce_state = self.formation_has_bounced()
             if bounce_state["positive_seen"] and bounce_state["negative_seen"]:
-                self.record_step("alien_bounce", "passed", bounce_state)
+                self.record_step("formation_bounce", "passed", bounce_state)
                 return bounce_state
             self.resume_for(1.0)
-            self.capture_sample("alien-watch")
-        bounce_state = self.alien_has_bounced()
-        raise PlaytestFailure(f"alien_bounce_timeout: {bounce_state}")
+            self.capture_sample("formation-watch")
+        bounce_state = self.formation_has_bounced()
+        raise PlaytestFailure(f"formation_bounce_timeout: {bounce_state}")
 
-    def align_player_with_alien(self):
-        self.logger.log("Aligning the player ship under the alien before firing")
-        last_sample = None
+    def choose_target_slot(self, sample, preferred_index: int = 1):
+        live_slots = self.live_formation_slots(sample)
+        if not live_slots:
+            raise PlaytestFailure(f"no_live_formation_slots: {sample}")
+        for slot in live_slots:
+            if slot["index"] == preferred_index:
+                return preferred_index
+        return live_slots[len(live_slots) // 2]["index"]
+
+    def align_player_with_formation_slot(self, preferred_index: int = 1):
+        self.logger.log("Aligning the player ship under a live formation slot before firing")
+        last_detail = None
         for _ in range(40):
             current = self.capture_sample("align-check")
-            last_sample = current
-            delta = current["player_x"] - current["alien_x"]
+            target_slot = self.choose_target_slot(current, preferred_index=preferred_index)
+            target_x = current[f"formation_{target_slot}_x"]
+            delta = current["player_x"] - target_x
+            last_detail = {"slot": target_slot, "sample": current}
             if abs(delta) <= 10:
-                self.record_step("player_aligned", "passed", current)
-                return current
+                self.record_step("player_aligned", "passed", last_detail)
+                return last_detail
 
             key_code = LEFT_KEY_CODE if delta > 0 else RIGHT_KEY_CODE
             self.gui.key_down(key_code)
@@ -638,7 +695,7 @@ class Playtester:
             finally:
                 self.gui.key_up(key_code)
 
-        raise PlaytestFailure(f"player_alignment_timeout: {last_sample}")
+        raise PlaytestFailure(f"player_alignment_timeout: {last_detail}")
 
     def fire_once(self, attempt: int):
         self.logger.log(f"Firing attempt {attempt}")
@@ -655,40 +712,40 @@ class Playtester:
             launched = self.capture_sample(f"fire-{attempt}-launch")
             self.assert_true(
                 f"fire_{attempt}_shot_spawned",
-                launched["shot_enabled"] or not launched["alien_enabled"],
+                launched["shot_enabled"] or self.formation_alive_count(launched) < 3,
                 launched,
             )
             return launched
         finally:
             self.gui.key_up(FIRE_KEY_CODE)
 
-    def destroy_alien_with_shots(self):
+    def destroy_formation_member(self):
         attempts = []
+        initial_alive_count = 3
         for attempt in range(1, 5):
-            aligned = self.align_player_with_alien()
+            alignment = self.align_player_with_formation_slot(preferred_index=1)
             launch = self.fire_once(attempt)
             attempt_detail = {
                 "attempt": attempt,
-                "aligned_sample": aligned,
+                "target_slot": alignment["slot"],
+                "aligned_sample": alignment["sample"],
                 "launch_sample": launch,
                 "shot_seen": launch["shot_enabled"],
             }
-
-            if not launch["alien_enabled"]:
-                attempts.append(attempt_detail)
-                self.record_step("alien_destroyed", "passed", attempt_detail)
-                return attempt_detail
 
             watch_sample = launch
             for _ in range(16):
                 self.resume_for(0.2)
                 watch_sample = self.capture_sample(f"fire-{attempt}-watch")
                 attempt_detail["shot_seen"] = attempt_detail["shot_seen"] or watch_sample["shot_enabled"]
-                if not watch_sample["alien_enabled"]:
+                if self.formation_alive_count(watch_sample) == initial_alive_count - 1:
                     attempt_detail["result"] = "hit"
+                    attempt_detail["destroyed_slots"] = [
+                        slot["index"] for slot in self.formation_slots(watch_sample) if not slot["enabled"]
+                    ]
                     attempt_detail["final_sample"] = watch_sample
                     attempts.append(attempt_detail)
-                    self.record_step("alien_destroyed", "passed", attempt_detail)
+                    self.record_step("formation_member_destroyed", "passed", attempt_detail)
                     return attempt_detail
                 if attempt_detail["shot_seen"] and not watch_sample["shot_enabled"]:
                     attempt_detail["result"] = "miss"
@@ -700,7 +757,36 @@ class Playtester:
 
             attempts.append(attempt_detail)
 
-        raise PlaytestFailure(f"alien_destroy_timeout: {attempts}")
+        raise PlaytestFailure(f"formation_destroy_timeout: {attempts}")
+
+    def verify_gap_persists(self, destroyed_slots, hit_sample):
+        self.logger.log("Checking that the destroyed slot remains a visible gap while the formation keeps moving")
+        self.resume_for(0.8)
+        follow_up = self.capture_sample("gap-check")
+        self.assert_true(
+            "gap_alive_count",
+            self.formation_alive_count(follow_up) == 2,
+            follow_up,
+        )
+        current_destroyed_slots = [
+            slot["index"] for slot in self.formation_slots(follow_up) if not slot["enabled"]
+        ]
+        self.assert_true(
+            "gap_same_slot_missing",
+            current_destroyed_slots == destroyed_slots,
+            {"expected": destroyed_slots, "sample": follow_up},
+        )
+        self.assert_true(
+            "formation_continues_after_hit",
+            self.leftmost_formation_x(hit_sample) != self.leftmost_formation_x(follow_up),
+            {"hit_sample": hit_sample, "follow_up": follow_up},
+        )
+        self.record_step(
+            "gap_persists",
+            "passed",
+            {"destroyed_slots": destroyed_slots, "sample": follow_up},
+        )
+        return follow_up
 
     def run(self):
         self.launch_vice()
@@ -710,9 +796,9 @@ class Playtester:
         initial = self.capture_sample("boot")
         self.assert_true(
             "initial_layout",
-            initial["player_y"] > initial["alien_y"]
+            initial["player_y"] > initial["formation_y"]
             and initial["player_y"] >= 180
-            and initial["alien_y"] <= 100,
+            and initial["formation_y"] <= 100,
             initial,
         )
         self.assert_true(
@@ -738,15 +824,21 @@ class Playtester:
         )
         self.assert_idle(right_clamp["player_x"], "right")
 
-        bounce_state = self.wait_for_alien_bounce()
-        self.assert_true("alien_moves", bounce_state["moved"], bounce_state)
+        bounce_state = self.wait_for_formation_bounce()
+        self.assert_true("formation_moves", bounce_state["moved"], bounce_state)
         self.assert_true(
-            "alien_bounces",
+            "formation_bounces",
             bounce_state["positive_seen"] and bounce_state["negative_seen"],
             bounce_state,
         )
 
-        hit_state = self.destroy_alien_with_shots()
+        hit_state = self.destroy_formation_member()
+        self.assert_true(
+            "one_slot_destroyed",
+            len(hit_state["destroyed_slots"]) == 1,
+            hit_state,
+        )
+        gap_state = self.verify_gap_persists(hit_state["destroyed_slots"], hit_state["final_sample"])
 
         captured_hashes = {
             sample["screenshot_sha256"]
@@ -783,8 +875,10 @@ class Playtester:
         self.results["summary"] = {
             "left_clamp_x": left_clamp["player_x"],
             "right_clamp_x": right_clamp["player_x"],
-            "alien_direction_samples": bounce_state["deltas"],
+            "formation_direction_samples": bounce_state["deltas"],
             "shot_attempts": hit_state["attempt"],
+            "destroyed_slots": hit_state["destroyed_slots"],
+            "alive_slots_after_hit": self.formation_alive_count(gap_state),
             "captured_frame_count": len(captured_hashes),
             "host_screenshots_enabled": self.host_capture_failure is None,
         }
