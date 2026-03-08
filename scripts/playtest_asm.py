@@ -689,7 +689,7 @@ class Playtester:
             if bounce_state["positive_seen"] and bounce_state["negative_seen"]:
                 self.record_step("formation_bounce", "passed", bounce_state)
                 return bounce_state
-            self.resume_for(1.0)
+            self.resume_for(1.25)
             self.capture_sample("formation-watch", include_joystick=False)
         bounce_state = self.formation_has_bounced()
         raise PlaytestFailure(f"formation_bounce_timeout: {bounce_state}")
@@ -703,25 +703,20 @@ class Playtester:
                 return preferred_index
         return min(live_slots, key=lambda slot: abs(slot["x"] - sample["player_x"]))["index"]
 
-    def wait_for_formation_slot_alignment(self, preferred_index: int = 5):
-        self.logger.log("Waiting for a live formation slot to drift into the player's firing lane")
-        last_detail = None
-        for _ in range(16):
-            current = self.capture_sample("align-check", include_joystick=False)
-            target_slot = self.choose_target_slot(current, preferred_index=preferred_index)
-            target_x = current[f"formation_{target_slot}_x"]
-            delta = current["player_x"] - target_x
-            last_detail = {"slot": target_slot, "sample": current, "mode": "passive"}
-            if abs(delta) <= 24:
-                return last_detail
-            self.resume_for(1.0)
-
-        raise PlaytestFailure(f"passive_player_alignment_timeout: {last_detail}")
+    def alignment_burst_seconds(self, delta: int) -> float:
+        distance = abs(delta)
+        if distance > 140:
+            return 1.0
+        if distance > 64:
+            return 0.45
+        if distance > 24:
+            return 0.2
+        return 0.1
 
     def align_player_with_formation_slot(self, preferred_index: int = 5):
         self.logger.log("Aligning the player ship under a live formation slot before firing")
         last_detail = None
-        for _ in range(40):
+        for _ in range(12):
             current = self.capture_sample("align-check", include_joystick=False)
             target_slot = self.choose_target_slot(current, preferred_index=preferred_index)
             target_x = current[f"formation_{target_slot}_x"]
@@ -734,7 +729,7 @@ class Playtester:
             key_code = LEFT_KEY_CODE if delta > 0 else RIGHT_KEY_CODE
             self.gui.key_down(key_code)
             try:
-                self.resume_for(0.2)
+                self.resume_for(self.alignment_burst_seconds(delta))
             finally:
                 self.gui.key_up(key_code)
 
@@ -767,17 +762,7 @@ class Playtester:
         attempts = []
         initial_alive_count = INITIAL_FORMATION_ALIVE_COUNT
         for attempt in range(1, 5):
-            try:
-                alignment = self.wait_for_formation_slot_alignment(preferred_index=5)
-            except PlaytestFailure as exc:
-                self.logger.log(f"Passive alignment timed out, falling back to movement: {exc}")
-                alignment = self.align_player_with_formation_slot(preferred_index=5)
-            else:
-                target_x = alignment["sample"][f"formation_{alignment['slot']}_x"]
-                if abs(alignment["sample"]["player_x"] - target_x) > 10:
-                    alignment = self.align_player_with_formation_slot(preferred_index=alignment["slot"])
-                else:
-                    self.record_step("player_aligned", "passed", alignment)
+            alignment = self.align_player_with_formation_slot(preferred_index=5)
             launch = self.fire_once(attempt)
             attempt_detail = {
                 "attempt": attempt,
