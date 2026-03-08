@@ -10,8 +10,10 @@ from generate_arcade_enemy_sprites import (
     ROW_COLOR_CODES,
     cell_pixels,
     decode_png_rgba,
+    enemy_cells_from_full_sheet,
     fit_color_rows_to_sprite_grid,
     find_separators,
+    is_full_arcade_sheet,
     pixels_to_color_codes,
     split_ranges,
 )
@@ -83,14 +85,24 @@ def build_sprite_sheet_rows(
     png_path: Path,
     row_indices: Optional[list[int]] = None,
 ) -> list[list[tuple[int, int, int, int]]]:
-    _, _, rows = decode_png_rgba(png_path)
-    separator_rows, separator_cols, background = find_separators(rows)
+    width, height, rows = decode_png_rgba(png_path)
+    if is_full_arcade_sheet(width, height, rows):
+        enemy_pixels = enemy_cells_from_full_sheet(rows)
+    else:
+        separator_rows, separator_cols, background = find_separators(rows)
 
-    x_ranges = split_ranges(len(rows[0]), separator_cols)
-    y_ranges = split_ranges(len(rows), separator_rows)
+        x_ranges = split_ranges(len(rows[0]), separator_cols)
+        y_ranges = split_ranges(len(rows), separator_rows)
 
-    if len(x_ranges) != 3 or len(y_ranges) != 3:
-        raise ValueError(f"Expected a 3x3 grid, got x={x_ranges} y={y_ranges}")
+        if len(x_ranges) != 3 or len(y_ranges) != 3:
+            raise ValueError(f"Expected a 3x3 grid, got x={x_ranges} y={y_ranges}")
+
+        enemy_pixels = []
+        for row_index in range(3):
+            row_cells = []
+            for frame_index in range(3):
+                row_cells.append(cell_pixels(rows, x_ranges[frame_index], y_ranges[row_index], background))
+            enemy_pixels.append(row_cells)
 
     selected_rows = row_indices if row_indices is not None else list(range(len(ROW_LABELS)))
 
@@ -99,7 +111,7 @@ def build_sprite_sheet_rows(
         row_specific_color = ROW_SPECIFIC_COLORS[row_index]
         sprite_row_buffers = [[] for _ in range(TARGET_SPRITE_HEIGHT)]
         for frame_index in range(3):
-            pixels = cell_pixels(rows, x_ranges[frame_index], y_ranges[row_index], background)
+            pixels = enemy_pixels[row_index][frame_index]
             codes = pixels_to_color_codes(pixels, ROW_COLOR_CODES[row_index])
             fitted = fit_color_rows_to_sprite_grid(
                 codes,
@@ -114,12 +126,12 @@ def build_sprite_sheet_rows(
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Build a 72x63 multicolor sprite sheet that png2prg can convert as 9 C64 sprites."
+        description="Build a 72x63 multicolor sprite sheet that png2prg can convert as the 9 enemy sprites."
     )
     parser.add_argument(
         "--png",
-        default="ArcadeGalaxian3ships.png",
-        help="Input 3x3 source PNG",
+        default="ArcadeGalaxianSprites.png",
+        help="Input PNG sprite sheet; extracts the first 3x3 enemy block from the full arcade sheet",
     )
     parser.add_argument(
         "--out",

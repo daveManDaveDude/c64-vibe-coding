@@ -8,6 +8,8 @@ from pathlib import Path
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 
 ROW_LABELS = ("flagship", "escort", "grunt")
+BLACK = (0, 0, 0, 255)
+GRAY_SEPARATOR = (48, 48, 48, 255)
 SOURCE_BLACK = (0, 0, 0, 255)
 SOURCE_RED = (224, 0, 0, 255)
 SOURCE_CYAN = (0, 133, 148, 255)
@@ -171,6 +173,78 @@ def find_separators(rows: list[list[tuple[int, int, int, int]]]) -> tuple[list[i
     return separator_rows, separator_cols, background
 
 
+def non_separator_ranges(separator_mask: list[bool]) -> list[range]:
+    ranges: list[range] = []
+    start = None
+    for index, is_separator in enumerate(separator_mask):
+        if not is_separator and start is None:
+            start = index
+        elif is_separator and start is not None:
+            ranges.append(range(start, index))
+            start = None
+    if start is not None:
+        ranges.append(range(start, len(separator_mask)))
+    return ranges
+
+
+def full_sheet_segments(
+    rows: list[list[tuple[int, int, int, int]]],
+    separator_color: tuple[int, int, int, int] = GRAY_SEPARATOR,
+    background: tuple[int, int, int, int] = BLACK,
+) -> list[tuple[int, int, range, range, list[list[tuple[int, int, int, int]]]]]:
+    y_ranges = non_separator_ranges([all(pixel == separator_color for pixel in row) for row in rows])
+
+    segments: list[tuple[int, int, range, range, list[list[tuple[int, int, int, int]]]]] = []
+    width = len(rows[0])
+    for band_index, y_range in enumerate(y_ranges):
+        x_ranges = non_separator_ranges(
+            [all(rows[y][x] == separator_color for y in y_range) for x in range(width)]
+        )
+        for segment_index, x_range in enumerate(x_ranges):
+            pixels = cell_pixels(rows, x_range, y_range, background)
+            if not any(
+                pixel not in (background, separator_color)
+                for row in pixels
+                for pixel in row
+            ):
+                continue
+            segments.append((band_index, segment_index, x_range, y_range, pixels))
+    return segments
+
+
+def is_full_arcade_sheet(
+    width: int,
+    height: int,
+    rows: list[list[tuple[int, int, int, int]]],
+) -> bool:
+    return (
+        width == 203
+        and height == 86
+        and all(pixel == GRAY_SEPARATOR for pixel in rows[0])
+    )
+
+
+def enemy_cells_from_full_sheet(
+    rows: list[list[tuple[int, int, int, int]]],
+) -> list[list[list[list[tuple[int, int, int, int]]]]]:
+    grouped: dict[tuple[int, int], list[list[tuple[int, int, int, int]]]] = {}
+    for band_index, segment_index, _, _, pixels in full_sheet_segments(rows):
+        grouped[(band_index, segment_index)] = pixels
+
+    enemy_cells: list[list[list[list[tuple[int, int, int, int]]]]] = []
+    for band_index in range(3):
+        row_cells = []
+        for segment_index in range(3):
+            key = (band_index, segment_index)
+            if key not in grouped:
+                raise ValueError(
+                    f"ArcadeGalaxianSprites.png is missing expected enemy cell band={band_index} segment={segment_index}"
+                )
+            row_cells.append(grouped[key])
+        enemy_cells.append(row_cells)
+    return enemy_cells
+
+
 def cell_pixels(
     rows: list[list[tuple[int, int, int, int]]],
     x_range: range,
@@ -266,19 +340,29 @@ def sprite_block(address: int, title: str, label: str, data: list[int]) -> str:
 
 
 def generate_sprite_rows(png_path: Path) -> list[tuple[str, str, list[int]]]:
-    _, _, rows = decode_png_rgba(png_path)
-    separator_rows, separator_cols, background = find_separators(rows)
+    width, height, rows = decode_png_rgba(png_path)
+    if is_full_arcade_sheet(width, height, rows):
+        enemy_pixels = enemy_cells_from_full_sheet(rows)
+    else:
+        separator_rows, separator_cols, background = find_separators(rows)
 
-    x_ranges = split_ranges(len(rows[0]), separator_cols)
-    y_ranges = split_ranges(len(rows), separator_rows)
+        x_ranges = split_ranges(len(rows[0]), separator_cols)
+        y_ranges = split_ranges(len(rows), separator_rows)
 
-    if len(x_ranges) != 3 or len(y_ranges) != 3:
-        raise ValueError(f"Expected 3 cell ranges in each direction, got x={x_ranges}, y={y_ranges}")
+        if len(x_ranges) != 3 or len(y_ranges) != 3:
+            raise ValueError(f"Expected 3 cell ranges in each direction, got x={x_ranges}, y={y_ranges}")
+
+        enemy_pixels = []
+        for row_index in range(3):
+            row_cells = []
+            for frame_index in range(3):
+                row_cells.append(cell_pixels(rows, x_ranges[frame_index], y_ranges[row_index], background))
+            enemy_pixels.append(row_cells)
 
     sprite_rows: list[tuple[str, str, list[int]]] = []
     for row_index, row_label in enumerate(ROW_LABELS):
         for frame_index in range(3):
-            pixels = cell_pixels(rows, x_ranges[frame_index], y_ranges[row_index], background)
+            pixels = enemy_pixels[row_index][frame_index]
             codes = pixels_to_color_codes(pixels, ROW_COLOR_CODES[row_index])
             fitted = fit_color_rows_to_sprite_grid(codes)
             packed = pack_multicolor_sprite_bytes(fitted)
@@ -313,10 +397,12 @@ def generate_binary(png_path: Path) -> bytes:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Generate C64 enemy sprite data from ArcadeGalaxian3ships.png.")
+    parser = argparse.ArgumentParser(
+        description="Generate the 9 enemy C64 sprites from ArcadeGalaxianSprites.png or a compatible 3x3 sheet."
+    )
     parser.add_argument(
         "--png",
-        default="ArcadeGalaxian3ships.png",
+        default="ArcadeGalaxianSprites.png",
         help="Input PNG sprite sheet",
     )
     parser.add_argument(

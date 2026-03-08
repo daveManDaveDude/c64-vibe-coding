@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SRC_PNG="${1:-ArcadeGalaxian3ships.png}"
+SRC_PNG="${1:-ArcadeGalaxianSprites.png}"
 OUT_DIR="${2:-artifacts/png2prg_enemy_rows}"
 OUT_BIN="${3:-src/generated_enemy_sprites_png2prg.bin}"
 

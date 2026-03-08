@@ -1,4 +1,4 @@
-// Generated from ArcadeGalaxian3ships.png by scripts/generate_arcade_enemy_sprites.py.
+// Generated from ArcadeGalaxianSprites.png by scripts/generate_arcade_enemy_sprites.py.
 // Do not edit by hand.
 
 * = $2000 "Flagship Sprite 0"

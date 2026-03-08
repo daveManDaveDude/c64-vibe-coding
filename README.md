@@ -121,25 +121,35 @@ make clean
 - `make verify-asm`: assembly console verification for sandbox/headless use
 - `make playtest-asm`: faster binary-monitor autoplay smoke test without per-sample host screenshots
 - `make playtest-asm-visible`: binary-monitor autoplay smoke test with visible VICE window and per-sample host screenshots
-- `make preview-sprites`: regenerate the enemy sprite bank and render an SVG preview to `artifacts/enemy-sprites-preview.svg`
-- `make debug-sprites`: print the generated enemy frames as ASCII and also render the SVG preview
-- `make convert-sprites-png2prg`: normalize the 3x3 source sheet for `png2prg`, run the conversion row-by-row, and write `src/generated_enemy_sprites_png2prg.bin`
+- `make preview-sprites`: regenerate the enemy subset and the full arcade sprite bank, then render SVG previews to `artifacts/enemy-sprites-preview.svg` and `artifacts/arcade-sprites-preview.svg`
+- `make debug-sprites`: print the generated enemy frames as ASCII and also regenerate both SVG previews
+- `make convert-sprites-png2prg`: normalize the first 3x3 enemy block from the full arcade sheet for `png2prg`, run the conversion row-by-row, and write `src/generated_enemy_sprites_png2prg.bin`
 
 ## Sprite Workflow
 
-The enemy sprite pipeline now generates two files from `ArcadeGalaxian3ships.png`:
+The sprite pipeline now uses `ArcadeGalaxianSprites.png` as the source of truth.
+The first `3x3` sprites on that full sheet are extracted into the in-game enemy bank, and the whole sheet is also exported as a separate asset bank.
+
+The enemy subset generation produces:
 
 - `src/generated_enemy_sprites.asm`: human-readable KickAssembler data for inspection and debugging
 - `src/generated_enemy_sprites.bin`: raw `64-byte` C64 sprite data that [`hello-asm.asm`](/Users/david/Documents/c64/c64-vibe-coding/src/hello-asm.asm#L1072) imports directly
 
-That raw binary format is the useful interchange point with external tools such as SpritePad, SpriteMate, or Master of Sprites: once a tool can export standard C64 sprite bytes, the game can read the result without re-encoding it as assembly text.
+The full-sheet export produces:
+
+- `src/generated_arcade_sprites.asm`: readable KickAssembler blocks for every extracted arcade asset layer
+- `src/generated_arcade_sprites.bin`: raw sprite bank for the entire sheet
+- `src/generated_arcade_sprites.json`: metadata that maps asset labels to one or more sprite layers for previewing or tooling
+
+Those raw binary formats are the useful interchange point with external tools such as SpritePad, SpriteMate, or Master of Sprites: once a tool can export standard C64 sprite bytes, the game can read the result without re-encoding it as assembly text.
 The current mapper preserves the source sprite pixels 1:1 inside the C64 multicolor sprite grid. It no longer rescales the sheet cells; it copies the extracted rows directly and only trims blank horizontal margin when a `16`-pixel source cell has to fit the `12` logical multicolor columns.
-The assembly build only regenerates these files from `ArcadeGalaxian3ships.png` when the PNG is newer or the generated files are missing, so a sprite editor can overwrite `src/generated_enemy_sprites.bin` without the next build immediately undoing it.
+The full-sheet exporter keeps each band segmented by the sheet's gray separator lines, so the non-uniform source layout still maps cleanly into individual C64 assets. The current export yields `55` assets as `64` sprite layers.
+The assembly build only regenerates these files from `ArcadeGalaxianSprites.png` when the PNG is newer or the generated files are missing, so a sprite editor can overwrite `src/generated_enemy_sprites.bin` without the next build immediately undoing it.
 
 There is also a repo-local `png2prg` path:
 
 - `tools/bin/png2prg`: official converter built locally from source
-- `scripts/build_png2prg_enemy_sheet.py`: converts the 3x3 source PNG into `png2prg`-friendly `24x21` sprite rows using exact `png2prg` palette colors
+- `scripts/build_png2prg_enemy_sheet.py`: extracts the first `3x3` enemy block from the full arcade sheet and converts it into `png2prg`-friendly `24x21` sprite rows using exact `png2prg` palette colors
 - `scripts/convert_enemy_sprites_with_png2prg.sh`: runs three row-wise `png2prg` passes and concatenates them into `src/generated_enemy_sprites_png2prg.bin`
 
 The current `png2prg` output byte-matches `src/generated_enemy_sprites.bin`.

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import html
+import json
 import re
 from pathlib import Path
 from typing import Optional
@@ -148,6 +149,17 @@ def load_binary_sprites(path: Path, labels: Optional[list[str]]) -> list[tuple[s
     ]
 
 
+def load_binary_sprite_chunks(path: Path) -> list[list[int]]:
+    payload = path.read_bytes()
+    if len(payload) % 64 != 0:
+        raise SystemExit(f"{path} is {len(payload)} bytes; expected a multiple of 64 for raw C64 sprites")
+    return [list(payload[index : index + 64]) for index in range(0, len(payload), 64)]
+
+
+def load_metadata(path: Path) -> dict:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
 def infer_sprite_color(label: str) -> int:
     if label.startswith("flagship_"):
         return 7
@@ -290,6 +302,121 @@ def render_svg(
     output_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def render_assets_svg(
+    assets: list[dict],
+    sprite_chunks: list[list[int]],
+    output_path: Path,
+    columns: int,
+    scale: int,
+) -> None:
+    sprite_width = 24
+    sprite_height = 21
+    title_height = scale * 3
+    padding = scale * 2
+    tile_width = sprite_width * scale + padding * 2
+    tile_height = sprite_height * scale + title_height + padding * 2
+    positioned = all("band" in asset and "segment" in asset for asset in assets)
+
+    if positioned and assets:
+        columns = max(asset["segment"] for asset in assets) + 1
+        total_rows = max(asset["band"] for asset in assets) + 1
+        origin_for_asset = lambda index, asset: (asset["segment"] * tile_width, asset["band"] * tile_height)
+    else:
+        columns = max(1, columns)
+        total_rows = (len(assets) + columns - 1) // columns
+        origin_for_asset = lambda index, asset: ((index % columns) * tile_width, (index // columns) * tile_height)
+
+    total_width = tile_width * columns
+    total_height = tile_height * total_rows
+
+    lines = [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        (
+            f'<svg xmlns="http://www.w3.org/2000/svg" width="{total_width}" '
+            f'height="{total_height}" viewBox="0 0 {total_width} {total_height}">'
+        ),
+        '  <rect width="100%" height="100%" fill="#0f1115"/>',
+    ]
+
+    if positioned:
+        occupied = {(asset["band"], asset["segment"]) for asset in assets}
+        for band in range(total_rows):
+            for segment in range(columns):
+                if (band, segment) in occupied:
+                    continue
+                origin_x = segment * tile_width
+                origin_y = band * tile_height
+                lines.append(f'  <g transform="translate({origin_x},{origin_y})">')
+                lines.append(
+                    f'    <rect x="0" y="0" width="{tile_width}" height="{tile_height}" '
+                    'rx="8" fill="#12161d" stroke="#252c37" stroke-dasharray="8 6"/>'
+                )
+                lines.append(
+                    f'    <text x="{padding}" y="{padding + scale}" fill="#5d6776" '
+                    f'font-family="Menlo, Monaco, monospace" font-size="{scale * 1.25}">empty</text>'
+                )
+                lines.append("  </g>")
+
+    for index, asset in enumerate(assets):
+        origin_x, origin_y = origin_for_asset(index, asset)
+        label = asset.get("label", asset.get("title", f"asset_{index}"))
+        title = asset.get("title", label)
+
+        lines.append(f'  <g transform="translate({origin_x},{origin_y})">')
+        lines.append(
+            f'    <rect x="0" y="0" width="{tile_width}" height="{tile_height}" '
+            'rx="8" fill="#171b22" stroke="#2b3340"/>'
+        )
+        lines.append(
+            f'    <text x="{padding}" y="{padding + scale}" fill="#d8dee9" '
+            f'font-family="Menlo, Monaco, monospace" font-size="{scale * 1.25}">{html.escape(label)}</text>'
+        )
+        lines.append(
+            f'    <rect x="{padding}" y="{padding + title_height}" width="{sprite_width * scale}" '
+            f'height="{sprite_height * scale}" fill="#050607" stroke="#222833"/>'
+        )
+
+        for layer in asset.get("layers", []):
+            sprite_index = layer.get("sprite_index")
+            if sprite_index is None or sprite_index >= len(sprite_chunks):
+                raise SystemExit(f"Metadata for {label} references missing sprite index {sprite_index}")
+            sprite_bytes = sprite_chunks[sprite_index]
+
+            if layer.get("mode") == "singlecolor":
+                decoded_rows = decode_singlecolor(sprite_bytes)
+                fill = C64_COLORS[layer["sprite_color"]]
+                for y, decoded_row in enumerate(decoded_rows):
+                    for x, bit in enumerate(decoded_row):
+                        if not bit:
+                            continue
+                        lines.append(
+                            f'    <rect x="{padding + x * scale}" y="{padding + title_height + y * scale}" '
+                            f'width="{scale}" height="{scale}" fill="{fill}"/>'
+                        )
+            else:
+                decoded_rows = decode_multicolor(sprite_bytes)
+                color_map = {
+                    1: C64_COLORS[layer["d025"]],
+                    2: C64_COLORS[layer["sprite_color"]],
+                    3: C64_COLORS[layer["d026"]],
+                }
+                for y, decoded_row in enumerate(decoded_rows):
+                    for x, code in enumerate(decoded_row):
+                        fill = color_map.get(code)
+                        if not fill:
+                            continue
+                        lines.append(
+                            f'    <rect x="{padding + x * scale * 2}" y="{padding + title_height + y * scale}" '
+                            f'width="{scale * 2}" height="{scale}" fill="{fill}"/>'
+                        )
+
+        lines.append("  </g>")
+
+    lines.append("</svg>")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Render raw C64 sprite data as an SVG preview sheet.")
     parser.add_argument(
@@ -342,9 +469,29 @@ def main() -> int:
         "--individual-colors",
         help="Comma-separated sprite-specific C64 color indices. One value repeats to all sprites.",
     )
+    parser.add_argument(
+        "--metadata",
+        help="Optional metadata JSON for composite asset previews",
+    )
     args = parser.parse_args()
 
     source_path = Path(args.source)
+    metadata_path = Path(args.metadata) if args.metadata else None
+    if metadata_path is None and source_path.suffix.lower() == ".bin":
+        auto_metadata_path = source_path.with_suffix(".json")
+        if auto_metadata_path.exists():
+            metadata_path = auto_metadata_path
+
+    if source_path.suffix.lower() == ".bin" and metadata_path and metadata_path.exists() and not args.labels:
+        metadata = load_metadata(metadata_path)
+        sprite_chunks = load_binary_sprite_chunks(source_path)
+        assets = metadata.get("assets", [])
+        if assets:
+            output_path = Path(args.out)
+            render_assets_svg(assets, sprite_chunks, output_path, args.columns, args.scale)
+            print(f"Wrote {output_path}")
+            return 0
+
     if source_path.suffix.lower() == ".bin":
         sprites = load_binary_sprites(source_path, args.labels)
     else:

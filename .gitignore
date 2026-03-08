@@ -2,3 +2,4 @@ artifacts/
 build/.pycache/
 tools/KickAssembler.zip
 tools/KickAssembler/
+src/generated_arcade_sprites.bin

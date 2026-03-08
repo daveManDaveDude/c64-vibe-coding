@@ -43,12 +43,15 @@ playtest-asm-visible:
 
 debug-sprites:
 	python3 scripts/generate_arcade_enemy_sprites.py
+	python3 scripts/generate_arcade_full_sheet_assets.py
 	python3 scripts/debug_sprite_frames.py --grouped
 	python3 scripts/preview_c64_sprites.py
 
 preview-sprites:
 	python3 scripts/generate_arcade_enemy_sprites.py
+	python3 scripts/generate_arcade_full_sheet_assets.py
 	python3 scripts/preview_c64_sprites.py
+	python3 scripts/preview_c64_sprites.py src/generated_arcade_sprites.bin --out artifacts/arcade-sprites-preview.svg
 
 convert-sprites-png2prg:
 	bash scripts/convert_enemy_sprites_with_png2prg.sh
