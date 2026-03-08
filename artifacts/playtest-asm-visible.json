@@ -1,0 +1,75 @@
+{
+  "artifacts": {
+    "json": "artifacts/playtest-asm-visible.json",
+    "log": "artifacts/playtest-asm-visible.log",
+    "vice_log": "artifacts/playtest-asm-visible-vice.log"
+  },
+  "failures": [],
+  "final_state": {
+    "alien_dir": 255,
+    "alien_max": 320,
+    "alien_min": 24,
+    "alien_x": 298,
+    "alien_y": 60,
+    "autoplay_error_code": 0,
+    "autoplay_mode": 1,
+    "autoplay_stage": 3,
+    "autoplay_status": 1,
+    "frame": 637,
+    "player_max": 320,
+    "player_min": 24,
+    "player_x": 320,
+    "player_y": 220
+  },
+  "steps": [
+    {
+      "name": "monitor_connect",
+      "status": "passed"
+    },
+    {
+      "name": "frame_counter_started",
+      "status": "passed"
+    },
+    {
+      "detail": {
+        "alien_dir": 1,
+        "alien_max": 320,
+        "alien_min": 24,
+        "alien_x": 25,
+        "alien_y": 60,
+        "autoplay_error_code": 0,
+        "autoplay_mode": 0,
+        "autoplay_stage": 0,
+        "autoplay_status": 0,
+        "frame": 2,
+        "player_max": 320,
+        "player_min": 24,
+        "player_x": 168,
+        "player_y": 220
+      },
+      "name": "initial_state",
+      "status": "passed"
+    },
+    {
+      "detail": {
+        "alien_dir": 255,
+        "alien_max": 320,
+        "alien_min": 24,
+        "alien_x": 298,
+        "alien_y": 60,
+        "autoplay_error_code": 0,
+        "autoplay_mode": 1,
+        "autoplay_stage": 3,
+        "autoplay_status": 1,
+        "frame": 637,
+        "player_max": 320,
+        "player_min": 24,
+        "player_x": 320,
+        "player_y": 220
+      },
+      "name": "internal_autoplay",
+      "status": "passed"
+    }
+  ],
+  "success": true
+}

@@ -1,0 +1,4 @@
+[00:30:25] Launching VICE monitor runner: scripts/run_vice_binary_monitor_visible.sh build/autoplay/hello-asm.prg artifacts/playtest-asm-visible-vice.log ip4://127.0.0.1:6502
+[00:30:26] Waiting for autoplay frame counter to start advancing
+[00:30:26] Starting internal autoplay script
+[00:30:39] Autoplay smoke test passed

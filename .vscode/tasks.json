@@ -79,6 +79,28 @@
       }
     },
     {
+      "label": "C64 ASM: Autoplay Smoke Test",
+      "type": "shell",
+      "command": "make playtest-asm",
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "clear": true
+      }
+    },
+    {
+      "label": "C64 ASM: Autoplay Smoke Test (Visible)",
+      "type": "shell",
+      "command": "make playtest-asm-visible",
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "clear": true
+      }
+    },
+    {
       "label": "C64: Run Live (Keep Open)",
       "type": "shell",
       "command": "make run",

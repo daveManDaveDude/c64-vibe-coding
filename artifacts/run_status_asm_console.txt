@@ -1,0 +1,3 @@
+vice_exit_code=1
+logfile=artifacts/vice-asm-console.log
+timestamp_utc=2026-03-08T00:14:12Z

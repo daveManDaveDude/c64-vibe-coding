@@ -1,0 +1,7 @@
+[00:29:15] Launching VICE monitor runner: scripts/run_vice_binary_monitor.sh build/autoplay/hello-asm.prg artifacts/playtest-asm-vice.log ip4://127.0.0.1:6502
+[00:29:16] Waiting for autoplay frame counter to start advancing
+[00:29:16] Driving player left to the clamp
+[00:29:18] Checking idle stability
+[00:29:19] Driving player right to the clamp
+[00:29:24] Observing alien motion and bounce
+[00:29:26] Autoplay smoke test passed

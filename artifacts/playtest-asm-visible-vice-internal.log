@@ -3,8 +3,8 @@
  
 This is the condensed log, for the full log use --verbose or --debug.
  
-Main: random seed was: 0x69acb95e
-Main: command line was: x64sc -default +confirmonexit +saveres -pal -power50 -autostart-warp -logfile artifacts/vice-asm.log -autostart build/hello-asm.d64:HELLOASM -limitcycles 12000000 -exitscreenshot artifacts/vice-asm-exit.png
+Main: random seed was: 0x69acc321
+Main: command line was: x64sc -default +confirmonexit +saveres -pal -power50 -autostart-warp -binarymonitor -binarymonitoraddress ip4://127.0.0.1:6502 -autostartprgmode 1 -logfile artifacts/playtest-asm-visible-vice-internal.log build/autoplay/hello-asm.prg
 Main: VICE system file directory: '/opt/homebrew/Cellar/vice/3.10/share/vice'.
 Main: VICE system file search path: '/Users/david/.local/share/vice:/Users/david/Documents/c64/c64-vibe-coding:/opt/homebrew/Cellar/vice/3.10/share/vice'.
 Sysfile: Loading `/opt/homebrew/Cellar/vice/3.10/share/vice/C64/kernal-901227-03.bin'.
@@ -32,15 +32,18 @@ Hotkeys: parsing default file '/opt/homebrew/Cellar/vice/3.10/share/vice/hotkeys
 Main CPU: 
 Main CPU: starting at ($FFFC).
 Main CPU: RESET.
-VIC-II: VSP Bug: safe channels are: 0123467. Emulation of memory corruption is disabled.
-AUTOSTART: Autodetecting image type of `build/hello-asm.d64'.
-AUTOSTART: Attached file `build/hello-asm.d64' as a disk image.
-AUTOSTART: mounted image is type: 1541, not changing drive.
-AUTOSTART: Resetting drive 8
-AUTOSTART: Resetting the machine to autostart 'HELLOASM'
-VIC-II: VSP Bug: safe channels are: 47. Emulation of memory corruption is disabled.
+VIC-II: VSP Bug: safe channels are: 234. Emulation of memory corruption is disabled.
+AUTOSTART: Autodetecting image type of `build/autoplay/hello-asm.prg'.
+Filesystem Image Probe: Error - Import GCR: Unknown GCR image version 48.
+Filesystem Image: Unknown disk image `build/autoplay/hello-asm.prg'.
+Tape: Error - Cannot open file `build/autoplay/hello-asm.prg'
+Error - no CRT header found.
+CART: '/Users/david/Documents/c64/c64-vibe-coding/build/autoplay/hello-asm.prg' is not a valid CRT file.
+AUTOSTART: Loading PRG file `build/autoplay/hello-asm.prg' with direct RAM injection.
+AUTOSTART: Resetting the machine to autostart '*'
+VIC-II: VSP Bug: safe channels are: 025. Emulation of memory corruption is disabled.
 AUTOSTART: Turning Warp mode on.
-AUTOSTART: `build/hello-asm.d64' recognized as disk image.
+AUTOSTART: `build/autoplay/hello-asm.prg' recognized as program/p00 file.
 Main CPU: RESET.
 sound (coreaudio_init): Found output audio device: LG TV
 sound (coreaudio_init): Found output audio device: Mac mini Speakers (Default)
@@ -48,27 +51,77 @@ sound (coreaudio_init): Using output audio device: Mac mini Speakers
 sound (coreaudio_init): audio frame buffer size in samples min: 14.000000 max: 4096.000000 fragment size: 32, chosen: 32
 sound (coreaudio_init): sampling rate conversion 48000Hz->44100Hz
 sound (coreaudio_start): Started
-Copybuffer increase to 102 bytes
 Sound: Opened device `coreaudio', speed 48000Hz, fragment size 0.67ms, buffer size 20.00ms
+Copybuffer increase to 102 bytes
 Sound: reSID: MOS8580, filter on, sampling rate 48000Hz - resampling, pass to 21600Hz
 VSync: Sync reset
 Unit 8: RESET.
-AUTOSTART: Loading program 'HELLOASM'
-AUTOSTART: Entered ROM at $e5d4
-AUTOSTART: Searching for ...
-AUTOSTART: Loading
-AUTOSTART: Entered ROM at $ea21
-Main CPU: Error - cycle limit reached.
+VSync: Sync reset
+VSync: Sync reset
+VSync: Sync reset
+VSync: Sync reset
+VSync: Sync reset
+VSync: Sync reset
+VSync: Sync reset
+VSync: Sync reset
+VSync: Sync reset
+VSync: Sync reset
+VSync: Sync reset
+VSync: Sync reset
+VSync: Sync reset
+VSync: Sync reset
+VSync: Sync reset
+VSync: Sync reset
+VSync: Sync reset
+VSync: Sync reset
+VSync: Sync reset
+VSync: Sync reset
+VSync: Sync reset
+VSync: Sync reset
+VSync: Sync reset
+VSync: Sync reset
+VSync: Sync reset
+VSync: Sync reset
+AUTOSTART: Injecting program data at $0801 (size $187f)
+AUTOSTART: Ready
+AUTOSTART: Turning Warp mode off.
+sound (coreaudio_start): Started
+AUTOSTART: Starting program.
+AUTOSTART: Restoring FileSystemDevice8 to 1.
+AUTOSTART: Restoring FSDevice8ConvertP00 to 1.
+AUTOSTART: Restoring FSDeviceLongNames to 0.
+AUTOSTART: Done.
+VSync: Sync reset
+sound (coreaudio_start): Started
+VSync: Sync reset
+sound (coreaudio_start): Started
+VSync: Sync reset
+Sound: Warning - Buffer full during suspend
+sound (coreaudio_start): Started
+VSync: Sync reset
+sound (coreaudio_start): Started
+VSync: Sync reset
+sound (coreaudio_start): Started
+VSync: Sync reset
+sound (coreaudio_start): Started
+VSync: Sync reset
+Sound: Warning - Buffer full during suspend
 
+Configure Flags:
+--disable-arch --disable-pdf-docs --enable-gtk3ui --enable-midi --enable-lame --enable-ethernet --enable-cpuhistory --with-flac --with-vorbis --with-gif --with-png --disable-debug --disable-dependency-tracking --prefix=/opt/homebrew/Cellar/vice/3.10 --libdir=/opt/homebrew/Cellar/vice/3.10/lib
 
-LogFileName="artifacts/vice-asm.log"
+Resources with non default values:
+LogFileName="artifacts/playtest-asm-visible-vice-internal.log"
 ConfirmOnExit=0
 Window0Height=638
 Window0Width=720
 Window0Xpos=608
-Window0Ypos=210
-ExitScreenshotName="artifacts/vice-asm-exit.png"
+Window0Ypos=211
+AutostartPrgMode=1
+BinaryMonitorServer=1
 
--default -logfile "artifacts/vice-asm.log" +confirmonexit -windowxpos "608" -windowypos "210" -windowwidth "720" -windowheight "638" -exitscreenshot "artifacts/vice-asm-exit.png"
-VIC-II: VSP Bug: safe channels are: 14. Emulation of memory corruption is disabled.
+reconstructed commandline options (might be incomplete):
+-default -logfile "artifacts/playtest-asm-visible-vice-internal.log" +confirmonexit -windowxpos "608" -windowypos "211" -windowwidth "720" -windowheight "638" -autostartprgmode "1" -binarymonitor
+
+VIC-II: VSP Bug: safe channels are: 46. Emulation of memory corruption is disabled.
 AudioComponentInstanceDispose

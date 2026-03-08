@@ -75,6 +75,24 @@ make run-timed
 make run-asm-timed
 ```
 
+Verify the assembly target in console mode without opening the GTK window:
+
+```bash
+make verify-asm
+```
+
+Run the assembly autoplay smoke test:
+
+```bash
+make playtest-asm
+```
+
+Run the assembly autoplay smoke test with the VICE window visible:
+
+```bash
+make playtest-asm-visible
+```
+
 Clean outputs:
 
 ```bash
@@ -96,16 +114,31 @@ make clean
 ## Assembly Targets
 
 - `make build-asm`: `src/hello-asm.asm` -> `build/hello-asm.prg`
+- `make build-asm-autoplay`: autoplay build -> `build/autoplay/hello-asm.prg`
 - `make d64-asm`: creates `build/hello-asm.d64` and writes `HELLOASM`
 - `make run-asm`: assembly live mode
 - `make run-asm-live`: assembly live alias
 - `make run-asm-timed`: assembly timed mode
+- `make verify-asm`: assembly console verification for sandbox/headless use
+- `make playtest-asm`: binary-monitor autoplay smoke test
+- `make playtest-asm-visible`: binary-monitor autoplay smoke test with visible VICE window
 
-## Assembly Hello World
+## Assembly Stage 2 Shell
 
-The sample assembly program lives at `src/hello-asm.asm`.
+The default assembly target lives at `src/hello-asm.asm`.
 
-It uses KickAssembler's `BasicUpstart2(start)` macro to generate the BASIC stub at `$0801`, then jumps into the machine-code entry point at `$1000`. That gives you the same "autostart from BASIC" style workflow you already had for BASIC sources, but with the body implemented in 6510 assembly.
+It uses KickAssembler's `BasicUpstart2(start)` macro to generate the BASIC stub at `$0801`, then jumps into the machine-code entry point at `$1000`. The program now serves as the Stage 2 Galaxian-style shell: it initializes a stable text screen, reserves a HUD row for future score/lives work, keeps one alien moving across the top of the playfield, and adds a player ship at the bottom that moves left and right from joystick port 2.
+
+## Assembly Autoplay
+
+The repo also includes a monitor-driven autoplay build/test path for the current Galaxian shell.
+
+- `scripts/build_asm_autoplay.sh` builds an autoplay variant with a test-only input hook.
+- `scripts/run_vice_binary_monitor.sh` launches VICE in console mode with the binary monitor enabled on `127.0.0.1:6502`.
+- `scripts/run_vice_binary_monitor_visible.sh` launches the same binary-monitor test path with the normal VICE window visible.
+- `scripts/playtest_asm.py` drives the game through the monitor, verifies left/right player movement and clamp behavior, and checks that the alien keeps moving and bounces.
+
+This path is VICE-native automation. `make playtest-asm` stays headless/console-friendly and uses monitor-driven step polling. `make playtest-asm-visible` switches the autoplay build into an internal scripted self-test mode so the emulator can keep running smoothly while you watch the window.
 
 ## VS Code Integration
 
@@ -117,6 +150,8 @@ Configured tasks in `.vscode/tasks.json`:
 - `C64: Run Live (Keep Open)` (default build task)
 - `C64 ASM: Build PRG`
 - `C64 ASM: Build D64`
+- `C64 ASM: Autoplay Smoke Test`
+- `C64 ASM: Autoplay Smoke Test (Visible)`
 - `C64 ASM: Run (VICE Pipeline)`
 - `C64 ASM: Run Live (Keep Open)`
 - `C64: Clean`
@@ -139,11 +174,28 @@ Timed mode:
 - `artifacts/vice-exit.png`
 - `artifacts/run_status.txt`
 
+Assembly console verification:
+- `artifacts/vice-asm-console.log`
+- `artifacts/run_status_asm_console.txt`
+
+Assembly autoplay smoke test:
+- `artifacts/playtest-asm.log`
+- `artifacts/playtest-asm.json`
+- `artifacts/playtest-asm-vice.log`
+
+Visible assembly autoplay smoke test:
+- `artifacts/playtest-asm-visible.log`
+- `artifacts/playtest-asm-visible.json`
+- `artifacts/playtest-asm-visible-vice.log`
+
 ## Notes
 
 - BASIC keywords should stay lowercase in ASCII source for reliable tokenization.
 - Timed mode may report a VICE non-zero exit when cycle limit is reached; pipeline handling normalizes this in `run_status.txt`.
 - `c1541` may print `OPENCBM` dynamic library warnings on macOS Homebrew installs; `.d64` creation still works for this workflow.
+- In Codex or other sandboxed environments, VICE GUI targets may require running outside the sandbox to access macOS display services. Use `make verify-asm` for non-GUI verification, and use `make run-asm` / `make run-asm-timed` from a normal host session for interactive/manual testing.
+- `make playtest-asm` uses the VICE binary monitor on `127.0.0.1:6502`. In a sandboxed Codex session that localhost socket may require escalated permissions; on a normal local macOS shell it runs directly.
+- `make playtest-asm-visible` also uses the binary monitor, but it opens the normal VICE GUI window and relies on an in-game autoplay state machine so monitor polling does not visibly slow the game down.
 
 ## Debugging in VS Code (BASIC step-through)
 
