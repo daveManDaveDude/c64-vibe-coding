@@ -187,22 +187,46 @@ def cell_pixels(
     return bitmap
 
 
-def scale_pixels(
-    pixels: list[list[tuple[int, int, int, int]]],
+def fit_color_rows_to_sprite_grid(
+    color_rows: list[list[int]],
     target_width: int = 12,
     target_height: int = 21,
-) -> list[list[tuple[int, int, int, int]]]:
-    source_height = len(pixels)
-    source_width = len(pixels[0])
-    scaled: list[list[tuple[int, int, int, int]]] = []
-    for y in range(target_height):
-        source_y = min((y * source_height) // target_height, source_height - 1)
-        row_pixels = []
-        for x in range(target_width):
-            source_x = min((x * source_width) // target_width, source_width - 1)
-            row_pixels.append(pixels[source_y][source_x])
-        scaled.append(row_pixels)
-    return scaled
+) -> list[list[int]]:
+    source_height = len(color_rows)
+    source_width = len(color_rows[0])
+
+    if source_height > target_height:
+        raise ValueError(
+            f"Source sprite height {source_height} exceeds C64 multicolor sprite height {target_height}"
+        )
+
+    min_x = source_width
+    max_x = -1
+    for row in color_rows:
+        for x, code in enumerate(row):
+            if code == 0:
+                continue
+            min_x = min(min_x, x)
+            max_x = max(max_x, x)
+
+    fitted = [[0 for _ in range(target_width)] for _ in range(target_height)]
+    if max_x < 0:
+        return fitted
+
+    content_width = max_x - min_x + 1
+    if content_width > target_width:
+        raise ValueError(
+            f"Source sprite content width {content_width} exceeds C64 multicolor sprite width {target_width}"
+        )
+
+    source_x_start = min_x
+    copy_width = min(target_width, source_width - source_x_start)
+
+    for y in range(source_height):
+        for x in range(copy_width):
+            fitted[y][x] = color_rows[y][source_x_start + x]
+
+    return fitted
 
 
 def pixels_to_color_codes(
@@ -241,7 +265,7 @@ def sprite_block(address: int, title: str, label: str, data: list[int]) -> str:
     return "\n".join(lines)
 
 
-def generate_source(png_path: Path) -> str:
+def generate_sprite_rows(png_path: Path) -> list[tuple[str, str, list[int]]]:
     _, _, rows = decode_png_rgba(png_path)
     separator_rows, separator_cols, background = find_separators(rows)
 
@@ -251,6 +275,21 @@ def generate_source(png_path: Path) -> str:
     if len(x_ranges) != 3 or len(y_ranges) != 3:
         raise ValueError(f"Expected 3 cell ranges in each direction, got x={x_ranges}, y={y_ranges}")
 
+    sprite_rows: list[tuple[str, str, list[int]]] = []
+    for row_index, row_label in enumerate(ROW_LABELS):
+        for frame_index in range(3):
+            pixels = cell_pixels(rows, x_ranges[frame_index], y_ranges[row_index], background)
+            codes = pixels_to_color_codes(pixels, ROW_COLOR_CODES[row_index])
+            fitted = fit_color_rows_to_sprite_grid(codes)
+            packed = pack_multicolor_sprite_bytes(fitted)
+            title = f"{row_label.capitalize()} Sprite {frame_index}"
+            label = f"{row_label}_sprite_frame{frame_index}"
+            sprite_rows.append((title, label, packed))
+
+    return sprite_rows
+
+
+def generate_source(png_path: Path) -> str:
     blocks = [
         f"// Generated from {png_path.name} by scripts/generate_arcade_enemy_sprites.py.",
         "// Do not edit by hand.",
@@ -258,21 +297,19 @@ def generate_source(png_path: Path) -> str:
     ]
 
     base_address = 0x2000
-    sprite_index = 0
-    for row_index, row_label in enumerate(ROW_LABELS):
-        for frame_index in range(3):
-            pixels = cell_pixels(rows, x_ranges[frame_index], y_ranges[row_index], background)
-            scaled = scale_pixels(pixels)
-            codes = pixels_to_color_codes(scaled, ROW_COLOR_CODES[row_index])
-            packed = pack_multicolor_sprite_bytes(codes)
-            title = f"{row_label.capitalize()} Sprite {frame_index}"
-            label = f"{row_label}_sprite_frame{frame_index}"
-            address = base_address + sprite_index * 0x40
-            blocks.append(sprite_block(address, title, label, packed))
-            blocks.append("")
-            sprite_index += 1
+    for sprite_index, (title, label, packed) in enumerate(generate_sprite_rows(png_path)):
+        address = base_address + sprite_index * 0x40
+        blocks.append(sprite_block(address, title, label, packed))
+        blocks.append("")
 
     return "\n".join(blocks).rstrip() + "\n"
+
+
+def generate_binary(png_path: Path) -> bytes:
+    data = bytearray()
+    for _, _, packed in generate_sprite_rows(png_path):
+        data.extend(packed)
+    return bytes(data)
 
 
 def main() -> int:
@@ -287,12 +324,21 @@ def main() -> int:
         default="src/generated_enemy_sprites.asm",
         help="Generated KickAssembler source file",
     )
+    parser.add_argument(
+        "--out-bin",
+        default="src/generated_enemy_sprites.bin",
+        help="Generated raw C64 sprite bank (64 bytes per sprite)",
+    )
     args = parser.parse_args()
 
     png_path = Path(args.png)
     output_path = Path(args.out)
     output_path.write_text(generate_source(png_path), encoding="utf-8")
     print(f"Wrote {output_path}")
+
+    output_bin_path = Path(args.out_bin)
+    output_bin_path.write_bytes(generate_binary(png_path))
+    print(f"Wrote {output_bin_path}")
     return 0
 
 

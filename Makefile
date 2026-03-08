@@ -1,4 +1,4 @@
-.PHONY: all build d64 run run-live run-timed build-asm d64-asm run-asm run-asm-live run-asm-timed verify-asm playtest-asm playtest-asm-visible debug-sprites clean
+.PHONY: all build d64 run run-live run-timed build-asm d64-asm run-asm run-asm-live run-asm-timed verify-asm playtest-asm playtest-asm-visible debug-sprites preview-sprites convert-sprites-png2prg clean
 
 all: run-live
 
@@ -44,6 +44,14 @@ playtest-asm-visible:
 debug-sprites:
 	python3 scripts/generate_arcade_enemy_sprites.py
 	python3 scripts/debug_sprite_frames.py --grouped
+	python3 scripts/preview_c64_sprites.py
+
+preview-sprites:
+	python3 scripts/generate_arcade_enemy_sprites.py
+	python3 scripts/preview_c64_sprites.py
+
+convert-sprites-png2prg:
+	bash scripts/convert_enemy_sprites_with_png2prg.sh
 
 clean:
 	rm -rf build artifacts

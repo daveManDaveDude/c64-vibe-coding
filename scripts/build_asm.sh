@@ -13,7 +13,13 @@ fi
 
 EXTRA_ARGS=("$@")
 
-python3 scripts/generate_arcade_enemy_sprites.py
+SPRITE_PNG="ArcadeGalaxian3ships.png"
+SPRITE_ASM="src/generated_enemy_sprites.asm"
+SPRITE_BIN="src/generated_enemy_sprites.bin"
+
+if [ ! -f "$SPRITE_ASM" ] || [ ! -f "$SPRITE_BIN" ] || [ "$SPRITE_PNG" -nt "$SPRITE_ASM" ] || [ "$SPRITE_PNG" -nt "$SPRITE_BIN" ]; then
+  python3 scripts/generate_arcade_enemy_sprites.py
+fi
 
 scripts/install_kickassembler.sh
 JAVA_BIN="$(scripts/find_java.sh)"

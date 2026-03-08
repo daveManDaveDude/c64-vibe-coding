@@ -103,7 +103,7 @@ def main() -> int:
     parser.add_argument(
         "asm_file",
         nargs="?",
-        default="src/hello-asm.asm",
+        default="src/generated_enemy_sprites.asm",
         help="Assembly file to inspect",
     )
     parser.add_argument(
