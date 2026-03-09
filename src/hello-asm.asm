@@ -52,11 +52,19 @@ BasicUpstart2(start)
 .label SPRITE7_COLOR = $d02e
 .label SCREEN_PTR = $fb
 .label COLOR_PTR = $fd
-// Keep the copied charset below the sprite asset block at $2240-$3a7f.
+// Keep the copied charset below the sprite asset block at $2480-$3cbf.
 .label CHARSET_RAM = $0800
 
 .label HUD_TEXT_COLOR = $01
 .label PLAYFIELD_TEXT_COLOR = $0e
+.label HUD_SCORE_COL = 6
+.label HUD_LIVES_COL = 31
+.label STATUS_ROW = 13
+.label STATUS_PROMPT_ROW = 15
+.label READY_MESSAGE_COL = 17
+.label WAVE_CLEAR_MESSAGE_COL = 15
+.label GAME_OVER_MESSAGE_COL = 15
+.label PRESS_FIRE_MESSAGE_COL = 15
 .label FORMATION_MULTI0_COLOR = $06
 .label FORMATION_MULTI1_COLOR = $02
 .label FLAGSHIP_COLOR = $07
@@ -82,7 +90,7 @@ BasicUpstart2(start)
 .label FORMATION_SLOT3_OFFSET = 36
 .label FORMATION_SLOT4_OFFSET = 0
 .label FORMATION_SLOT5_OFFSET = 36
-.label ARCADE_SPRITE_PTR_BASE = $89
+.label ARCADE_SPRITE_PTR_BASE = $92
 .label FLAGSHIP_SPRITE0_PTR = ARCADE_SPRITE_PTR_BASE + 0
 .label FLAGSHIP_SPRITE1_PTR = ARCADE_SPRITE_PTR_BASE + 1
 .label FLAGSHIP_SPRITE2_PTR = ARCADE_SPRITE_PTR_BASE + 2
@@ -109,7 +117,7 @@ BasicUpstart2(start)
 .label PLAYER_EXPLOSION_MULTI0_COLOR = $07
 .label PLAYER_EXPLOSION_MULTI1_COLOR = $04
 .label PLAYER_EXPLOSION_COLOR = $02
-.label PLAYER_EXPLOSION_PTR_BASE = $da
+.label PLAYER_EXPLOSION_PTR_BASE = $e3
 .label PLAYER_EXPLOSION_FRAME_TICKS = 5
 .label PLAYER_EXPLOSION_FRAME_COUNT = 4
 .label PLAYER_EXPLOSION_TILE_OFFSET = 16
@@ -122,11 +130,11 @@ BasicUpstart2(start)
 .label PLAYER_MIN_X_HI = $00
 .label PLAYER_MAX_X_LO = $40
 .label PLAYER_MAX_X_HI = $01
-.label PLAYER_WHITE_SPRITE_PTR = $c9
-.label PLAYER_RED_SPRITE_PTR = $ca
-.label PLAYER_CYAN_SPRITE_PTR = $cb
+.label PLAYER_WHITE_SPRITE_PTR = $d2
+.label PLAYER_RED_SPRITE_PTR = $d3
+.label PLAYER_CYAN_SPRITE_PTR = $d4
 .label SHOT_COLOR = $01
-.label SHOT_SPRITE_PTR = $cc
+.label SHOT_SPRITE_PTR = $d5
 .label SHOT_START_Y = PLAYER_Y - 12
 .label SHOT_SPEED = 10
 .label SHOT_MIN_Y = 16
@@ -167,15 +175,25 @@ BasicUpstart2(start)
 .label ENEMY_BULLET_MAX_Y = 248
 .label ENEMY_EXPLOSION_COLOR = $07
 .label ENEMY_EXPLOSION_FRAME_TICKS = 6
-.label ENEMY_EXPLOSION_SPRITE0_PTR = $d6
-.label ENEMY_EXPLOSION_SPRITE1_PTR = $d7
-.label ENEMY_EXPLOSION_SPRITE2_PTR = $d8
-.label ENEMY_EXPLOSION_SPRITE3_PTR = $d9
+.label ENEMY_EXPLOSION_SPRITE0_PTR = $df
+.label ENEMY_EXPLOSION_SPRITE1_PTR = $e0
+.label ENEMY_EXPLOSION_SPRITE2_PTR = $e1
+.label ENEMY_EXPLOSION_SPRITE3_PTR = $e2
 .label PLAYER_TOP_SPLIT_RASTER = 40
 .label PLAYER_BOTTOM_SPLIT_RASTER = 170
 .label RASTER_PHASE_TOP = $00
 .label RASTER_PHASE_BOTTOM = $01
+.label GAME_STATE_READY = $00
+.label GAME_STATE_PLAYING = $01
+.label GAME_STATE_PLAYER_HIT = $02
+.label GAME_STATE_RESPAWN = $03
+.label GAME_STATE_GAME_OVER = $04
+.label GAME_STATE_WAVE_CLEAR = $05
+.label INITIAL_PLAYER_LIVES = 3
+.label READY_DELAY = 50
+.label PLAYER_HIT_DELAY = 48
 .label PLAYER_RESPAWN_DELAY = 40
+.label WAVE_CLEAR_DELAY = 64
 // Match the visible union of the extracted player ship layers.
 .label PLAYER_HIT_TOP_OFFSET = 0
 .label PLAYER_HIT_BOTTOM_OFFSET = 15
@@ -197,18 +215,17 @@ start:
   jsr init_charset
   jsr clear_screen
   jsr draw_hud
-  jsr init_score
-  jsr init_formation
-  jsr init_player
   jsr init_shot
   jsr init_dive_attack
   jsr init_enemy_fire
   jsr init_raster_irq
+  jsr start_new_game
   cli
 
 main_loop:
   jsr wait_frame
   jsr update_effects
+  jsr update_game_state
   jsr update_player
   jsr update_shot
   jsr update_formation
@@ -321,6 +338,134 @@ init_score:
   sta score_award_lo
   sta score_award_mid
   sta score_award_hi
+  jsr update_score_display
+  rts
+
+update_score_display:
+  lda score_total_hi
+  ldx #HUD_SCORE_COL
+  jsr write_bcd_score_digits
+  lda score_total_mid
+  ldx #(HUD_SCORE_COL + 2)
+  jsr write_bcd_score_digits
+  lda score_total_lo
+  ldx #(HUD_SCORE_COL + 4)
+  jsr write_bcd_score_digits
+  rts
+
+write_bcd_score_digits:
+  pha
+  .for (var i = 0; i < 4; i++) {
+    lsr
+  }
+  clc
+  adc #$30
+  sta SCREEN_RAM, x
+  lda #HUD_TEXT_COLOR
+  sta COLOR_RAM, x
+  inx
+  pla
+  and #$0f
+  clc
+  adc #$30
+  sta SCREEN_RAM, x
+  lda #HUD_TEXT_COLOR
+  sta COLOR_RAM, x
+  rts
+
+update_lives_display:
+  lda player_lives
+  cmp #$0a
+  bcc update_lives_display_store
+  lda #$09
+update_lives_display_store:
+  clc
+  adc #$30
+  sta SCREEN_RAM + HUD_LIVES_COL
+  lda #HUD_TEXT_COLOR
+  sta COLOR_RAM + HUD_LIVES_COL
+  rts
+
+clear_status_area:
+  ldx #$00
+clear_status_area_loop:
+  lda #$20
+  sta SCREEN_RAM + (STATUS_ROW * 40), x
+  sta SCREEN_RAM + (STATUS_PROMPT_ROW * 40), x
+  lda #PLAYFIELD_TEXT_COLOR
+  sta COLOR_RAM + (STATUS_ROW * 40), x
+  sta COLOR_RAM + (STATUS_PROMPT_ROW * 40), x
+  inx
+  cpx #40
+  bcc clear_status_area_loop
+  rts
+
+show_ready_message:
+  jsr clear_status_area
+  ldx #$00
+show_ready_message_loop:
+  lda ready_message, x
+  beq show_ready_message_done
+  sta SCREEN_RAM + (STATUS_ROW * 40) + READY_MESSAGE_COL, x
+  lda #HUD_TEXT_COLOR
+  sta COLOR_RAM + (STATUS_ROW * 40) + READY_MESSAGE_COL, x
+  inx
+  bne show_ready_message_loop
+show_ready_message_done:
+  rts
+
+show_wave_clear_message:
+  jsr clear_status_area
+  ldx #$00
+show_wave_clear_message_loop:
+  lda wave_clear_message, x
+  beq show_wave_clear_message_done
+  sta SCREEN_RAM + (STATUS_ROW * 40) + WAVE_CLEAR_MESSAGE_COL, x
+  lda #HUD_TEXT_COLOR
+  sta COLOR_RAM + (STATUS_ROW * 40) + WAVE_CLEAR_MESSAGE_COL, x
+  inx
+  bne show_wave_clear_message_loop
+show_wave_clear_message_done:
+  rts
+
+show_game_over_message:
+  jsr clear_status_area
+  ldx #$00
+show_game_over_message_loop:
+  lda game_over_message, x
+  beq show_game_over_message_done
+  sta SCREEN_RAM + (STATUS_ROW * 40) + GAME_OVER_MESSAGE_COL, x
+  lda #HUD_TEXT_COLOR
+  sta COLOR_RAM + (STATUS_ROW * 40) + GAME_OVER_MESSAGE_COL, x
+  inx
+  bne show_game_over_message_loop
+show_game_over_message_done:
+  rts
+
+show_press_fire_message:
+  ldx #$00
+show_press_fire_message_loop:
+  lda press_fire_message, x
+  beq show_press_fire_message_done
+  sta SCREEN_RAM + (STATUS_PROMPT_ROW * 40) + PRESS_FIRE_MESSAGE_COL, x
+  lda #HUD_TEXT_COLOR
+  sta COLOR_RAM + (STATUS_PROMPT_ROW * 40) + PRESS_FIRE_MESSAGE_COL, x
+  inx
+  bne show_press_fire_message_loop
+show_press_fire_message_done:
+  rts
+
+clear_player_input_state:
+  lda #$00
+  sta effective_left
+  sta effective_right
+  sta effective_fire
+  sta joystick_state
+  rts
+
+lock_fire_until_release:
+  lda #$01
+  sta fire_locked
   rts
 
 init_formation:
@@ -381,6 +526,16 @@ init_formation:
   rts
 
 init_player:
+  jmp restore_player_ship
+
+restore_player_ship:
+  jsr finish_player_explosion
+
+  lda #$01
+  sta player_visible
+  lda #$00
+  sta enemy_attack_active
+
   lda #PLAYER_RED_SPRITE_PTR
   sta SPRITE_POINTERS + 1
 
@@ -402,6 +557,18 @@ init_player:
 
   lda SPRITE_ENABLE
   ora #%00000010
+  sta SPRITE_ENABLE
+
+  lda #ENEMY_BULLET_FIRE_COOLDOWN
+  sta enemy_fire_cooldown
+  rts
+
+hide_player_ship:
+  lda #$00
+  sta player_visible
+
+  lda SPRITE_ENABLE
+  and #%11111101
   sta SPRITE_ENABLE
   rts
 
@@ -475,6 +642,11 @@ init_enemy_fire_loop:
 
   lda #$00
   sta enemy_fire_cooldown
+  sta game_state
+  sta game_state_timer
+  sta player_lives
+  sta player_visible
+  sta enemy_attack_active
   sta player_respawn_timer
   sta player_left_lo
   sta player_left_hi
@@ -572,6 +744,250 @@ wait_for_next_frame:
   beq wait_for_next_frame
   rts
 
+clear_active_dive_state:
+  lda #$00
+  sta dive_active
+  sta dive_phase
+  sta dive_timer
+  sta dive_anim_frame
+  sta dive_anim_tick
+  sta dive_fire_hold_timer
+
+  lda #DIVE_SLOT_NONE
+  sta dive_slot
+
+  lda #DIVE_START_DELAY
+  sta dive_delay
+  rts
+
+cancel_active_dive:
+  lda dive_active
+  beq cancel_active_dive_done
+  jsr store_formation_x
+  jsr restore_dive_slot_y
+  jsr clear_active_dive_state
+cancel_active_dive_done:
+  rts
+
+clear_enemy_hit_animations:
+  ldx #$00
+clear_enemy_hit_animations_loop:
+  lda #$00
+  sta slot_explosion_timer, x
+  sta slot_explosion_frame, x
+  inx
+  cpx #$06
+  bcc clear_enemy_hit_animations_loop
+  rts
+
+reset_wave_runtime:
+  jsr deactivate_shot
+  jsr clear_enemy_bullets
+  jsr clear_enemy_hit_animations
+  jsr cancel_active_dive
+  jsr finish_player_explosion
+  jsr clear_player_input_state
+  lda #$00
+  sta player_respawn_timer
+  rts
+
+start_new_wave:
+  jsr reset_wave_runtime
+  jsr init_formation
+  jsr restore_player_ship
+  jsr enter_ready_state
+  rts
+
+start_new_game:
+  jsr draw_hud
+  jsr init_score
+  lda #INITIAL_PLAYER_LIVES
+  sta player_lives
+  jsr update_lives_display
+  jsr start_new_wave
+  rts
+
+enter_ready_state:
+  lda #GAME_STATE_READY
+  sta game_state
+  lda #READY_DELAY
+  sta game_state_timer
+  lda #$00
+  sta player_respawn_timer
+  jsr clear_player_input_state
+  jsr lock_fire_until_release
+  jsr show_ready_message
+  rts
+
+enter_playing_state:
+  lda #GAME_STATE_PLAYING
+  sta game_state
+  lda #$00
+  sta game_state_timer
+  sta player_respawn_timer
+  jsr clear_status_area
+  rts
+
+enter_player_hit_state:
+  lda player_lives
+  beq enter_player_hit_state_done
+  dec player_lives
+  jsr update_lives_display
+  jsr deactivate_shot
+  jsr clear_enemy_bullets
+  jsr cancel_active_dive
+  jsr start_player_explosion
+  jsr hide_player_ship
+  jsr clear_player_input_state
+  jsr lock_fire_until_release
+  lda #GAME_STATE_PLAYER_HIT
+  sta game_state
+  lda #PLAYER_HIT_DELAY
+  sta game_state_timer
+  lda #$00
+  sta player_respawn_timer
+  jsr clear_status_area
+  jsr start_hit_flash
+enter_player_hit_state_done:
+  rts
+
+enter_respawn_state:
+  jsr restore_player_ship
+  lda #GAME_STATE_RESPAWN
+  sta game_state
+  lda #PLAYER_RESPAWN_DELAY
+  sta game_state_timer
+  sta player_respawn_timer
+  jsr clear_player_input_state
+  jsr lock_fire_until_release
+  jsr show_ready_message
+  rts
+
+enter_wave_clear_state:
+  jsr deactivate_shot
+  jsr clear_enemy_bullets
+  lda #GAME_STATE_WAVE_CLEAR
+  sta game_state
+  lda #WAVE_CLEAR_DELAY
+  sta game_state_timer
+  lda #$00
+  sta player_respawn_timer
+  jsr clear_player_input_state
+  jsr lock_fire_until_release
+  jsr show_wave_clear_message
+  rts
+
+enter_game_over_state:
+  jsr finish_player_explosion
+  jsr hide_player_ship
+  lda #GAME_STATE_GAME_OVER
+  sta game_state
+  lda #$00
+  sta game_state_timer
+  sta player_respawn_timer
+  jsr clear_player_input_state
+  jsr lock_fire_until_release
+  jsr show_game_over_message
+  jsr show_press_fire_message
+  rts
+
+update_game_state:
+  lda game_state
+  beq update_ready_state
+  cmp #GAME_STATE_PLAYING
+  beq update_game_state_done
+  cmp #GAME_STATE_PLAYER_HIT
+  beq update_player_hit_state
+  cmp #GAME_STATE_RESPAWN
+  beq update_respawn_state
+  cmp #GAME_STATE_GAME_OVER
+  beq update_game_over_state
+  jmp update_wave_clear_state
+
+update_ready_state:
+  lda game_state_timer
+  beq update_ready_state_done
+  dec game_state_timer
+  bne update_game_state_done
+update_ready_state_done:
+  jmp enter_playing_state
+
+update_player_hit_state:
+  lda game_state_timer
+  beq update_player_hit_state_done
+  dec game_state_timer
+  bne update_game_state_done
+update_player_hit_state_done:
+  lda player_lives
+  bne update_player_hit_respawn
+  jmp enter_game_over_state
+update_player_hit_respawn:
+  jmp enter_respawn_state
+
+update_respawn_state:
+  lda game_state_timer
+  beq update_respawn_state_done
+  dec game_state_timer
+  lda game_state_timer
+  sta player_respawn_timer
+  bne update_game_state_done
+update_respawn_state_done:
+  jmp enter_playing_state
+
+update_game_over_state:
+  jsr read_player_input
+  lda effective_fire
+  beq update_game_over_wait_release
+  lda fire_locked
+  bne update_game_state_done
+  jmp start_new_game
+
+update_game_over_wait_release:
+  lda #$00
+  sta fire_locked
+  rts
+
+update_wave_clear_state:
+  lda game_state_timer
+  beq update_wave_clear_state_done
+  dec game_state_timer
+  bne update_game_state_done
+update_wave_clear_state_done:
+  jmp start_new_wave
+
+update_game_state_done:
+  rts
+
+player_can_be_hit:
+  lda game_state
+  cmp #GAME_STATE_PLAYING
+  bne player_cannot_be_hit
+  lda player_visible
+  beq player_cannot_be_hit
+  sec
+  rts
+
+player_cannot_be_hit:
+  clc
+  rts
+
+check_wave_cleared:
+  lda game_state
+  cmp #GAME_STATE_PLAYING
+  bne check_wave_cleared_done
+
+  lda formation_slot0_alive
+  ora formation_slot1_alive
+  ora formation_slot2_alive
+  ora formation_slot3_alive
+  ora formation_slot4_alive
+  ora formation_slot5_alive
+  bne check_wave_cleared_done
+
+  jsr enter_wave_clear_state
+check_wave_cleared_done:
+  rts
+
 update_effects:
   lda hit_flash_timer
   beq effects_check_player_explosion
@@ -591,6 +1007,10 @@ effects_done:
   rts
 
 update_formation:
+  lda game_state
+  cmp #GAME_STATE_PLAYING
+  bne formation_done
+
   inc formation_frame
   jsr update_formation_animation
   lda formation_frame
@@ -723,6 +1143,17 @@ formation_anim_done:
   rts
 
 update_dive_attack:
+  lda game_state
+  cmp #GAME_STATE_PLAYING
+  beq update_dive_attack_active
+  rts
+
+update_dive_attack_active:
+  lda enemy_attack_active
+  bne update_dive_attack_run
+  rts
+
+update_dive_attack_run:
   lda dive_active
   beq dive_wait_for_launch
 
@@ -802,20 +1233,7 @@ dive_store_position_done:
 finish_dive_return:
   jsr store_formation_x
   jsr restore_dive_slot_y
-
-  lda #$00
-  sta dive_active
-  sta dive_phase
-  sta dive_timer
-  sta dive_anim_frame
-  sta dive_anim_tick
-  sta dive_fire_hold_timer
-
-  lda #DIVE_SLOT_NONE
-  sta dive_slot
-
-  lda #DIVE_START_DELAY
-  sta dive_delay
+  jsr clear_active_dive_state
   rts
 
 launch_dive_if_possible:
@@ -1349,6 +1767,14 @@ restore_dive_slot5_y:
   rts
 
 update_enemy_fire:
+  lda game_state
+  cmp #GAME_STATE_PLAYING
+  beq update_enemy_fire_active
+  rts
+
+update_enemy_fire_active:
+  lda enemy_attack_active
+  beq update_enemy_fire_done
   jsr erase_enemy_bullets
 
   ldx #$00
@@ -1379,12 +1805,10 @@ update_enemy_fire_next:
 
   jsr try_spawn_enemy_bullet
   jsr draw_enemy_bullets
+update_enemy_fire_done:
   rts
 
 try_spawn_enemy_bullet:
-  lda player_respawn_timer
-  bne try_spawn_enemy_bullet_done
-
   lda enemy_fire_cooldown
   beq enemy_fire_ready
   dec enemy_fire_cooldown
@@ -1580,8 +2004,8 @@ enemy_bullet_col_done:
   rts
 
 enemy_bullet_hits_player:
-  lda player_respawn_timer
-  bne enemy_bullet_miss
+  jsr player_can_be_hit
+  bcc enemy_bullet_miss
 
   lda enemy_bullet_y, x
   cmp #PLAYER_HIT_MAX_Y
@@ -1648,8 +2072,8 @@ compute_player_hitbox:
   rts
 
 dive_hits_player:
-  lda player_respawn_timer
-  bne dive_hits_player_miss
+  jsr player_can_be_hit
+  bcc dive_hits_player_miss
 
   lda dive_y
   cmp #PLAYER_HIT_MAX_Y
@@ -1698,67 +2122,21 @@ dive_hits_player_miss:
   rts
 
 handle_player_hit:
-  lda player_respawn_timer
-  bne handle_player_hit_done
-
-  jsr deactivate_shot
-  jsr clear_enemy_bullets
-  jsr start_player_explosion
-
-  lda #PLAYER_RESPAWN_DELAY
-  sta player_respawn_timer
-
-  lda #$00
-  sta effective_left
-  sta effective_right
-  sta effective_fire
-  sta fire_locked
-
-  lda SPRITE_ENABLE
-  and #%11111101
-  sta SPRITE_ENABLE
-
-  jsr start_hit_flash
+  jsr player_can_be_hit
+  bcc handle_player_hit_done
+  jsr enter_player_hit_state
 handle_player_hit_done:
   rts
 
 respawn_player:
-  jsr finish_player_explosion
-
-  lda #PLAYER_RED_SPRITE_PTR
-  sta SPRITE_POINTERS + 1
-
-  lda #PLAYER_START_X_LO
-  sta player_x_lo
-  lda #PLAYER_START_X_HI
-  sta player_x_hi
-  jsr store_player_x
-
-  lda #PLAYER_Y
-  sta SPRITE1_Y
-
-  lda #PLAYER_COLOR
-  sta SPRITE1_COLOR
-
-  lda SPRITE_MULTICOLOR
-  and #%11111101
-  sta SPRITE_MULTICOLOR
-
-  lda SPRITE_ENABLE
-  ora #%00000010
-  sta SPRITE_ENABLE
-
-  lda #ENEMY_BULLET_FIRE_COOLDOWN
-  sta enemy_fire_cooldown
-  rts
+  jmp restore_player_ship
 
 update_player:
-  lda player_respawn_timer
+  lda game_state
+  cmp #GAME_STATE_PLAYING
   beq update_player_controls
-  dec player_respawn_timer
-  bne update_player_done
-  jsr respawn_player
-update_player_done:
+  cmp #GAME_STATE_RESPAWN
+  beq update_player_controls
   rts
 
 update_player_controls:
@@ -1895,6 +2273,15 @@ joystick_fire_pressed:
   rts
 
 update_shot:
+  lda game_state
+  cmp #GAME_STATE_PLAYING
+  beq update_shot_active
+  cmp #GAME_STATE_RESPAWN
+  beq update_shot_active
+shot_done:
+  rts
+
+update_shot_active:
   lda shot_active
   beq shot_done
 
@@ -1916,7 +2303,6 @@ shot_continue:
 
 shot_remove:
   jsr deactivate_shot
-shot_done:
   rts
 
 check_shot_collision:
@@ -2186,6 +2572,7 @@ spawn_player_shot:
 
   lda #$01
   sta shot_active
+  sta enemy_attack_active
   rts
 
 deactivate_shot:
@@ -2366,17 +2753,7 @@ clear_dive_if_slot:
   cpx dive_slot
   bne clear_dive_done
 
-  lda #$00
-  sta dive_active
-  sta dive_phase
-  sta dive_timer
-  sta dive_fire_hold_timer
-
-  lda #DIVE_SLOT_NONE
-  sta dive_slot
-
-  lda #DIVE_START_DELAY
-  sta dive_delay
+  jsr clear_active_dive_state
 clear_dive_done:
   rts
 
@@ -2388,6 +2765,7 @@ award_flagship_score:
   lda #SCORE_FLAGSHIP_HI
   sta score_award_hi
   jsr add_score_award
+  jsr check_wave_cleared
   jmp start_hit_flash
 
 award_escort_score:
@@ -2398,6 +2776,7 @@ award_escort_score:
   lda #SCORE_ESCORT_HI
   sta score_award_hi
   jsr add_score_award
+  jsr check_wave_cleared
   jmp start_hit_flash
 
 award_grunt_score:
@@ -2408,6 +2787,7 @@ award_grunt_score:
   lda #SCORE_GRUNT_HI
   sta score_award_hi
   jsr add_score_award
+  jsr check_wave_cleared
   jmp start_hit_flash
 
 add_score_award:
@@ -2423,6 +2803,7 @@ add_score_award:
   adc score_award_hi
   sta score_total_hi
   cld
+  jsr update_score_display
   rts
 
 start_hit_flash:
@@ -2707,8 +3088,8 @@ draw_player_bottom_effects_player:
   jmp draw_player_extra_layers
 
 draw_player_extra_layers:
-  lda player_respawn_timer
-  bne draw_player_extra_layers_done
+  lda player_visible
+  beq draw_player_extra_layers_done
 
   jsr select_player_extra_slots
 
@@ -3545,6 +3926,10 @@ player_x_lo:
   .byte PLAYER_START_X_LO
 player_x_hi:
   .byte PLAYER_START_X_HI
+player_visible:
+  .byte $00
+player_lives:
+  .byte $00
 player_white_slot:
   .byte $00
 player_cyan_slot:
@@ -3568,6 +3953,12 @@ raster_phase:
 player_extra_visible:
   .byte $00
 formation_restore_anim_index:
+  .byte $00
+game_state:
+  .byte GAME_STATE_READY
+game_state_timer:
+  .byte $00
+enemy_attack_active:
   .byte $00
 shot_x_lo:
   .byte $00
@@ -3663,7 +4054,15 @@ score_award_hi:
   .byte $00
 
 hud_row0:
-  .byte 19,3,15,18,5,32,48,48,48,48,32,32,32,32,32,32,32,32,32,12,9,22,5,19,32,51,0
+  .byte 19,3,15,18,5,32,48,48,48,48,48,48,32,32,32,32,32,32,32,32,32,32,32,32,32,12,9,22,5,19,32,51,0
+ready_message:
+  .byte 18,5,1,4,25,0
+wave_clear_message:
+  .byte 23,1,22,5,32,3,12,5,1,18,0
+game_over_message:
+  .byte 7,1,13,5,32,15,22,5,18,0
+press_fire_message:
+  .byte 16,18,5,19,19,32,6,9,18,5,0
 
 flagship_animation_sequence:
   .byte FLAGSHIP_SPRITE0_PTR,FLAGSHIP_SPRITE1_PTR,FLAGSHIP_SPRITE0_PTR,FLAGSHIP_SPRITE1_PTR
@@ -3718,26 +4117,26 @@ color_row_hi:
     .byte >(COLOR_RAM + (row * 40))
   }
 
-* = $2240 "Arcade Sprites"
+* = $2480 "Arcade Sprites"
 
 .import binary "generated_arcade_sprites.bin"
 
-* = $3240 "Player White Sprite"
+* = $3480 "Player White Sprite"
 
 player_overlay_sprite:
   .import binary "generated_player_overlay.bin"
 
-* = $3280 "Player Red Sprite"
+* = $34c0 "Player Red Sprite"
 
 player_sprite:
   .import binary "generated_player_sprite.bin"
 
-* = $32c0 "Player Cyan Sprite"
+* = $3500 "Player Cyan Sprite"
 
 player_extra_sprite:
   .import binary "generated_player_extra.bin"
 
-* = $3300 "Shot Sprite"
+* = $3540 "Shot Sprite"
 
 shot_sprite:
   .byte $00,$18,$00
@@ -3763,7 +4162,7 @@ shot_sprite:
   .byte $00,$00,$00
   .byte $00
 
-* = $3340 "Enemy Bullet Charset Data"
+* = $3580 "Enemy Bullet Charset Data"
 
 enemy_bullet_charset:
   .for (var sy = 0; sy < 8; sy++) {
@@ -3794,7 +4193,7 @@ enemy_bullet_charset:
   .byte $00,$00,$00
   .byte $00
 
-* = $3580 "Enemy Explosion Sprite 0"
+* = $37c0 "Enemy Explosion Sprite 0"
 
 enemy_explosion_sprite0:
   .byte $00,$00,$00
@@ -3820,7 +4219,7 @@ enemy_explosion_sprite0:
   .byte $00,$00,$00
   .byte $00
 
-* = $35c0 "Enemy Explosion Sprite 1"
+* = $3800 "Enemy Explosion Sprite 1"
 
 enemy_explosion_sprite1:
   .byte $00,$00,$00
@@ -3846,7 +4245,7 @@ enemy_explosion_sprite1:
   .byte $00,$00,$00
   .byte $00
 
-* = $3600 "Enemy Explosion Sprite 2"
+* = $3840 "Enemy Explosion Sprite 2"
 
 enemy_explosion_sprite2:
   .byte $90,$50,$00
@@ -3872,7 +4271,7 @@ enemy_explosion_sprite2:
   .byte $00,$00,$00
   .byte $00
 
-* = $3640 "Enemy Explosion Sprite 3"
+* = $3880 "Enemy Explosion Sprite 3"
 
 enemy_explosion_sprite3:
   .byte $00,$00,$00
@@ -3898,7 +4297,7 @@ enemy_explosion_sprite3:
   .byte $00,$00,$00
   .byte $00
 
-* = $3680 "Player Explosion Sprites"
+* = $38c0 "Player Explosion Sprites"
 
 player_explosion_sprites:
   .import binary "generated_player_explosion.bin"
