@@ -17,9 +17,11 @@ That runs:
 python3 scripts/generate_arcade_enemy_sprites.py
 python3 scripts/generate_arcade_full_sheet_assets.py
 python3 scripts/generate_player_sprite.py
+python3 scripts/generate_player_explosion_sprites.py
 python3 scripts/preview_c64_sprites.py
 python3 scripts/preview_c64_sprites.py src/generated_arcade_sprites.bin --out artifacts/arcade-sprites-preview.svg
 python3 scripts/preview_player_sprite.py
+python3 scripts/preview_player_explosion.py
 ```
 
 The specific file you asked to regenerate is:
@@ -69,6 +71,24 @@ It extracts the first `3x3` block from the same PNG and writes:
 
 This is the compact bank used by the current enemy formation code.
 
+## Player-specific Outputs
+
+Two small repo-local generators derive player art from the source PNGs:
+
+- `scripts/generate_player_sprite.py`
+  Extracts the layered player ship from `generated_arcade_sprites.bin` and writes the red, white, and cyan sprite files the game imports.
+- `scripts/generate_player_explosion_sprites.py`
+  Converts `ArcadeGalaxianSprites explosions.png` into a `4`-frame `2x2` multicolor metasprite bank for the player death animation.
+
+Those generators write:
+
+- `src/generated_player_sprite.asm`
+- `src/generated_player_sprite.bin`
+- `src/generated_player_overlay.bin`
+- `src/generated_player_extra.bin`
+- `src/generated_player_explosion.asm`
+- `src/generated_player_explosion.bin`
+
 ## How The Game Uses The Results
 
 The assembly program imports the generated sprite banks directly as binary data.
@@ -92,6 +112,7 @@ For inspection, the pipeline also writes:
 - `artifacts/arcade-sprites-preview.svg`
 - `artifacts/enemy-sprites-preview.svg`
 - `artifacts/player-sprite-preview.svg`
+- `artifacts/player-explosion-preview.svg`
 
 These previews are for validation only.
 The real interchange format for the game is the `.bin` sprite data plus the `.json` metadata.

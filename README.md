@@ -121,8 +121,8 @@ make clean
 - `make verify-asm`: assembly console verification for sandbox/headless use
 - `make playtest-asm`: faster binary-monitor autoplay smoke test without per-sample host screenshots
 - `make playtest-asm-visible`: binary-monitor autoplay smoke test with visible VICE window and per-sample host screenshots
-- `make preview-sprites`: regenerate the enemy subset and the full arcade sprite bank, then render SVG previews to `artifacts/enemy-sprites-preview.svg` and `artifacts/arcade-sprites-preview.svg`
-- `make debug-sprites`: print the generated enemy frames as ASCII and also regenerate both SVG previews
+- `make preview-sprites`: regenerate the enemy subset, full arcade sprite bank, player sprite layers, and player explosion bank, then render SVG previews to `artifacts/enemy-sprites-preview.svg`, `artifacts/arcade-sprites-preview.svg`, `artifacts/player-sprite-preview.svg`, and `artifacts/player-explosion-preview.svg`
+- `make debug-sprites`: print the generated enemy frames as ASCII and also regenerate the sprite previews
 - `make convert-sprites-png2prg`: normalize the first 3x3 enemy block from the full arcade sheet for `png2prg`, run the conversion row-by-row, and write `src/generated_enemy_sprites_png2prg.bin`
 
 ## Sprite Workflow
@@ -141,6 +141,15 @@ The full-sheet export produces:
 - `src/generated_arcade_sprites.asm`: readable KickAssembler blocks for every extracted arcade asset layer
 - `src/generated_arcade_sprites.bin`: raw sprite bank for the entire sheet
 - `src/generated_arcade_sprites.json`: metadata that maps asset labels to one or more sprite layers for previewing or tooling
+
+The player-only extraction path also produces:
+
+- `src/generated_player_sprite.asm`: readable copy of the layered player ship
+- `src/generated_player_sprite.bin`: red player base layer
+- `src/generated_player_overlay.bin`: white player overlay layer
+- `src/generated_player_extra.bin`: cyan player overlay layer
+- `src/generated_player_explosion.asm`: readable `4x` frame player explosion metasprite bank
+- `src/generated_player_explosion.bin`: raw `16`-sprite player explosion bank
 
 Those raw binary formats are the useful interchange point with external tools such as SpritePad, SpriteMate, or Master of Sprites: once a tool can export standard C64 sprite bytes, the game can read the result without re-encoding it as assembly text.
 The current mapper preserves the source sprite pixels 1:1 inside the C64 multicolor sprite grid. It no longer rescales the sheet cells; it copies the extracted rows directly and only trims blank horizontal margin when a `16`-pixel source cell has to fit the `12` logical multicolor columns.

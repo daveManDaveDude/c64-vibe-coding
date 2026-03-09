@@ -14,6 +14,7 @@ fi
 EXTRA_ARGS=("$@")
 
 SPRITE_PNG="ArcadeGalaxianSprites.png"
+PLAYER_EXPLOSION_PNG="ArcadeGalaxianSprites explosions.png"
 SPRITE_ASM="src/generated_enemy_sprites.asm"
 SPRITE_BIN="src/generated_enemy_sprites.bin"
 FULL_SPRITE_ASM="src/generated_arcade_sprites.asm"
@@ -23,6 +24,8 @@ PLAYER_SPRITE_ASM="src/generated_player_sprite.asm"
 PLAYER_SPRITE_BIN="src/generated_player_sprite.bin"
 PLAYER_OVERLAY_BIN="src/generated_player_overlay.bin"
 PLAYER_EXTRA_BIN="src/generated_player_extra.bin"
+PLAYER_EXPLOSION_ASM="src/generated_player_explosion.asm"
+PLAYER_EXPLOSION_BIN="src/generated_player_explosion.bin"
 
 if [ ! -f "$SPRITE_ASM" ] || [ ! -f "$SPRITE_BIN" ] || [ "$SPRITE_PNG" -nt "$SPRITE_ASM" ] || [ "$SPRITE_PNG" -nt "$SPRITE_BIN" ]; then
   python3 scripts/generate_arcade_enemy_sprites.py
@@ -34,6 +37,10 @@ fi
 
 if [ ! -f "$PLAYER_SPRITE_ASM" ] || [ ! -f "$PLAYER_SPRITE_BIN" ] || [ ! -f "$PLAYER_OVERLAY_BIN" ] || [ ! -f "$PLAYER_EXTRA_BIN" ] || [ "$FULL_SPRITE_BIN" -nt "$PLAYER_SPRITE_ASM" ] || [ "$FULL_SPRITE_BIN" -nt "$PLAYER_SPRITE_BIN" ] || [ "$FULL_SPRITE_BIN" -nt "$PLAYER_OVERLAY_BIN" ] || [ "$FULL_SPRITE_BIN" -nt "$PLAYER_EXTRA_BIN" ] || [ "$FULL_SPRITE_JSON" -nt "$PLAYER_SPRITE_ASM" ] || [ "$FULL_SPRITE_JSON" -nt "$PLAYER_SPRITE_BIN" ] || [ "$FULL_SPRITE_JSON" -nt "$PLAYER_OVERLAY_BIN" ] || [ "$FULL_SPRITE_JSON" -nt "$PLAYER_EXTRA_BIN" ]; then
   python3 scripts/generate_player_sprite.py
+fi
+
+if [ ! -f "$PLAYER_EXPLOSION_ASM" ] || [ ! -f "$PLAYER_EXPLOSION_BIN" ] || [ "$PLAYER_EXPLOSION_PNG" -nt "$PLAYER_EXPLOSION_ASM" ] || [ "$PLAYER_EXPLOSION_PNG" -nt "$PLAYER_EXPLOSION_BIN" ]; then
+  python3 scripts/generate_player_explosion_sprites.py
 fi
 
 scripts/install_kickassembler.sh
