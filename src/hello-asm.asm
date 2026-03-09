@@ -104,7 +104,7 @@ BasicUpstart2(start)
 .label PLAYER_CYAN_COLOR = $03
 .label PLAYER_START_X_LO = $a8
 .label PLAYER_START_X_HI = $00
-.label PLAYER_Y = 220
+.label PLAYER_Y = 228
 .label PLAYFIELD_LEFT_X_LO = $18
 .label PLAYFIELD_LEFT_X_HI = $00
 .label PLAYFIELD_TOP_Y = 50
@@ -156,17 +156,27 @@ BasicUpstart2(start)
 .label ENEMY_BULLET_FIRE_MAX_Y = 156
 .label ENEMY_BULLET_MAX_Y = 248
 .label ENEMY_EXPLOSION_COLOR = $07
-.label ENEMY_EXPLOSION_FRAME_TICKS = 4
+.label ENEMY_EXPLOSION_FRAME_TICKS = 6
 .label ENEMY_EXPLOSION_SPRITE0_PTR = $d6
 .label ENEMY_EXPLOSION_SPRITE1_PTR = $d7
 .label ENEMY_EXPLOSION_SPRITE2_PTR = $d8
+.label ENEMY_EXPLOSION_SPRITE3_PTR = $d9
 .label PLAYER_TOP_SPLIT_RASTER = 40
 .label PLAYER_BOTTOM_SPLIT_RASTER = 170
 .label RASTER_PHASE_TOP = $00
 .label RASTER_PHASE_BOTTOM = $01
 .label PLAYER_RESPAWN_DELAY = 40
-.label PLAYER_HIT_MAX_Y = PLAYER_Y + 21
-.label PLAYER_HIT_RIGHT_OFFSET = 23
+// Match the visible union of the extracted player ship layers.
+.label PLAYER_HIT_TOP_OFFSET = 0
+.label PLAYER_HIT_BOTTOM_OFFSET = 15
+.label PLAYER_HIT_LEFT_OFFSET = 6
+.label PLAYER_HIT_RIGHT_OFFSET = 18
+.label PLAYER_HIT_MIN_Y = PLAYER_Y + PLAYER_HIT_TOP_OFFSET
+.label PLAYER_HIT_MAX_Y = PLAYER_Y + PLAYER_HIT_BOTTOM_OFFSET + 1
+.label DIVE_HIT_BOTTOM_OFFSET = 20
+.label DIVE_HIT_RIGHT_OFFSET = 23
+.label ENEMY_BULLET_HIT_BOTTOM_OFFSET = 3
+.label ENEMY_BULLET_HIT_RIGHT_OFFSET = 1
 
 * = $1000 "Main Program"
 
@@ -456,6 +466,8 @@ init_enemy_fire_loop:
   lda #$00
   sta enemy_fire_cooldown
   sta player_respawn_timer
+  sta player_left_lo
+  sta player_left_hi
   sta player_right_lo
   sta player_right_hi
   sta enemy_bullet_row
@@ -750,6 +762,10 @@ dive_phase2_move_down:
 dive_store_position:
   jsr update_dive_animation
   jsr store_dive_position
+  jsr dive_hits_player
+  bcc dive_store_position_done
+  jsr handle_player_hit
+dive_store_position_done:
   rts
 
 finish_dive_return:
@@ -1537,28 +1553,35 @@ enemy_bullet_hits_player:
   bne enemy_bullet_miss
 
   lda enemy_bullet_y, x
-  cmp #PLAYER_Y
-  bcc enemy_bullet_miss
   cmp #PLAYER_HIT_MAX_Y
   bcs enemy_bullet_miss
+  cmp #PLAYER_HIT_MIN_Y
+  bcs enemy_bullet_check_horizontal
+  clc
+  adc #ENEMY_BULLET_HIT_BOTTOM_OFFSET
+  cmp #PLAYER_HIT_MIN_Y
+  bcc enemy_bullet_miss
 
+enemy_bullet_check_horizontal:
+  jsr compute_player_hitbox
+
+  lda enemy_bullet_x_lo, x
+  clc
+  adc #ENEMY_BULLET_HIT_RIGHT_OFFSET
+  sta target_right_lo
   lda enemy_bullet_x_hi, x
-  cmp player_x_hi
+  adc #$00
+  sta target_right_hi
+
+  lda target_right_hi
+  cmp player_left_hi
   bcc enemy_bullet_miss
   bne enemy_bullet_check_right
-  lda enemy_bullet_x_lo, x
-  cmp player_x_lo
+  lda target_right_lo
+  cmp player_left_lo
   bcc enemy_bullet_miss
 
 enemy_bullet_check_right:
-  lda player_x_lo
-  clc
-  adc #PLAYER_HIT_RIGHT_OFFSET
-  sta player_right_lo
-  lda player_x_hi
-  adc #$00
-  sta player_right_hi
-
   lda player_right_hi
   cmp enemy_bullet_x_hi, x
   bcc enemy_bullet_miss
@@ -1572,6 +1595,74 @@ enemy_bullet_hit:
   rts
 
 enemy_bullet_miss:
+  clc
+  rts
+
+compute_player_hitbox:
+  lda player_x_lo
+  clc
+  adc #PLAYER_HIT_LEFT_OFFSET
+  sta player_left_lo
+  lda player_x_hi
+  adc #$00
+  sta player_left_hi
+
+  lda player_x_lo
+  clc
+  adc #PLAYER_HIT_RIGHT_OFFSET
+  sta player_right_lo
+  lda player_x_hi
+  adc #$00
+  sta player_right_hi
+  rts
+
+dive_hits_player:
+  lda player_respawn_timer
+  bne dive_hits_player_miss
+
+  lda dive_y
+  cmp #PLAYER_HIT_MAX_Y
+  bcs dive_hits_player_miss
+  cmp #PLAYER_HIT_MIN_Y
+  bcs dive_hits_player_check_horizontal
+  clc
+  adc #DIVE_HIT_BOTTOM_OFFSET
+  cmp #PLAYER_HIT_MIN_Y
+  bcc dive_hits_player_miss
+
+dive_hits_player_check_horizontal:
+  jsr compute_player_hitbox
+
+  lda dive_x_lo
+  clc
+  adc #DIVE_HIT_RIGHT_OFFSET
+  sta target_right_lo
+  lda dive_x_hi
+  adc #$00
+  sta target_right_hi
+
+  lda target_right_hi
+  cmp player_left_hi
+  bcc dive_hits_player_miss
+  bne dive_hits_player_check_right
+  lda target_right_lo
+  cmp player_left_lo
+  bcc dive_hits_player_miss
+
+dive_hits_player_check_right:
+  lda player_right_hi
+  cmp dive_x_hi
+  bcc dive_hits_player_miss
+  bne dive_hits_player_hit
+  lda player_right_lo
+  cmp dive_x_lo
+  bcc dive_hits_player_miss
+
+dive_hits_player_hit:
+  sec
+  rts
+
+dive_hits_player_miss:
   clc
   rts
 
@@ -1992,7 +2083,16 @@ spawn_player_shot:
 deactivate_shot:
   lda #$00
   sta shot_active
+  sta shot_x_lo
+  sta shot_x_hi
   sta shot_y
+  sta SPRITE2_Y
+  lda SPRITE_ENABLE
+  and #%11111011
+  sta SPRITE_ENABLE
+  lda SPRITE_X_MSB
+  and #%11111011
+  sta SPRITE_X_MSB
   rts
 
 update_enemy_hit_animations:
@@ -2005,7 +2105,7 @@ enemy_hit_anim_loop:
 
   inc slot_explosion_frame, x
   lda slot_explosion_frame, x
-  cmp #$03
+  cmp #$04
   bcc advance_slot_explosion
   txa
   jsr finish_slot_explosion
@@ -2031,105 +2131,6 @@ start_slot_explosion:
   sta slot_explosion_timer, x
   txa
   jmp set_slot_explosion_frame
-
-set_slot_explosion_frame:
-  tax
-  jsr slot_reserved_for_player_bottom
-  bcs set_slot_explosion_skip
-  ldy slot_explosion_frame, x
-  lda enemy_explosion_sequence, y
-  sta enemy_explosion_pointer
-  txa
-  beq set_slot0_explosion_frame
-  cmp #$01
-  beq set_slot1_explosion_frame
-  cmp #$02
-  beq set_slot2_explosion_frame
-  cmp #$03
-  beq set_slot3_explosion_frame
-  cmp #$04
-  beq set_slot4_explosion_frame
-  jmp set_slot5_explosion_frame
-set_slot_explosion_skip:
-  rts
-
-set_slot0_explosion_frame:
-  lda SPRITE_MULTICOLOR
-  and #%11111110
-  sta SPRITE_MULTICOLOR
-  lda enemy_explosion_pointer
-  sta SPRITE_POINTERS
-  lda #ENEMY_EXPLOSION_COLOR
-  sta SPRITE0_COLOR
-  lda SPRITE_ENABLE
-  ora #FORMATION_SLOT0_MASK
-  sta SPRITE_ENABLE
-  rts
-
-set_slot1_explosion_frame:
-  lda SPRITE_MULTICOLOR
-  and #%11110111
-  sta SPRITE_MULTICOLOR
-  lda enemy_explosion_pointer
-  sta SPRITE_POINTERS + 3
-  lda #ENEMY_EXPLOSION_COLOR
-  sta SPRITE3_COLOR
-  lda SPRITE_ENABLE
-  ora #FORMATION_SLOT1_MASK
-  sta SPRITE_ENABLE
-  rts
-
-set_slot2_explosion_frame:
-  lda SPRITE_MULTICOLOR
-  and #%11101111
-  sta SPRITE_MULTICOLOR
-  lda enemy_explosion_pointer
-  sta SPRITE_POINTERS + 4
-  lda #ENEMY_EXPLOSION_COLOR
-  sta SPRITE4_COLOR
-  lda SPRITE_ENABLE
-  ora #FORMATION_SLOT2_MASK
-  sta SPRITE_ENABLE
-  rts
-
-set_slot3_explosion_frame:
-  lda SPRITE_MULTICOLOR
-  and #%11011111
-  sta SPRITE_MULTICOLOR
-  lda enemy_explosion_pointer
-  sta SPRITE_POINTERS + 5
-  lda #ENEMY_EXPLOSION_COLOR
-  sta SPRITE5_COLOR
-  lda SPRITE_ENABLE
-  ora #FORMATION_SLOT3_MASK
-  sta SPRITE_ENABLE
-  rts
-
-set_slot4_explosion_frame:
-  lda SPRITE_MULTICOLOR
-  and #%10111111
-  sta SPRITE_MULTICOLOR
-  lda enemy_explosion_pointer
-  sta SPRITE_POINTERS + 6
-  lda #ENEMY_EXPLOSION_COLOR
-  sta SPRITE6_COLOR
-  lda SPRITE_ENABLE
-  ora #FORMATION_SLOT4_MASK
-  sta SPRITE_ENABLE
-  rts
-
-set_slot5_explosion_frame:
-  lda SPRITE_MULTICOLOR
-  and #%01111111
-  sta SPRITE_MULTICOLOR
-  lda enemy_explosion_pointer
-  sta SPRITE_POINTERS + 7
-  lda #ENEMY_EXPLOSION_COLOR
-  sta SPRITE7_COLOR
-  lda SPRITE_ENABLE
-  ora #FORMATION_SLOT5_MASK
-  sta SPRITE_ENABLE
-  rts
 
 finish_slot_explosion:
   tax
@@ -2188,6 +2189,8 @@ destroy_slot0:
   lda #$00
   sta formation_slot0_alive
   lda #$00
+  jsr store_slot_explosion_position
+  lda #$00
   jsr clear_dive_if_slot
   lda #$00
   jsr start_slot_explosion
@@ -2196,6 +2199,8 @@ destroy_slot0:
 destroy_slot1:
   lda #$00
   sta formation_slot1_alive
+  lda #$01
+  jsr store_slot_explosion_position
   lda #$01
   jsr clear_dive_if_slot
   lda #$01
@@ -2206,6 +2211,8 @@ destroy_slot2:
   lda #$00
   sta formation_slot2_alive
   lda #$02
+  jsr store_slot_explosion_position
+  lda #$02
   jsr clear_dive_if_slot
   lda #$02
   jsr start_slot_explosion
@@ -2214,6 +2221,8 @@ destroy_slot2:
 destroy_slot3:
   lda #$00
   sta formation_slot3_alive
+  lda #$03
+  jsr store_slot_explosion_position
   lda #$03
   jsr clear_dive_if_slot
   lda #$03
@@ -2224,6 +2233,8 @@ destroy_slot4:
   lda #$00
   sta formation_slot4_alive
   lda #$04
+  jsr store_slot_explosion_position
+  lda #$04
   jsr clear_dive_if_slot
   lda #$04
   jsr start_slot_explosion
@@ -2232,6 +2243,8 @@ destroy_slot4:
 destroy_slot5:
   lda #$00
   sta formation_slot5_alive
+  lda #$05
+  jsr store_slot_explosion_position
   lda #$05
   jsr clear_dive_if_slot
   lda #$05
@@ -3096,6 +3109,12 @@ slot_explosion_timer:
   .fill 6, $00
 slot_explosion_frame:
   .fill 6, $00
+explosion_slot_x_lo:
+  .fill 6, $00
+explosion_slot_x_hi:
+  .fill 6, $00
+explosion_slot_y:
+  .fill 6, $00
 dive_moved_this_tick:
   .byte $00
 dive_prev_x_lo:
@@ -3200,6 +3219,10 @@ enemy_fire_cooldown:
   .byte $00
 player_respawn_timer:
   .byte $00
+player_left_lo:
+  .byte $00
+player_left_hi:
+  .byte $00
 player_right_lo:
   .byte $00
 player_right_hi:
@@ -3249,7 +3272,7 @@ grunt_dive_animation_sequence:
 grunt_dive_animation_colors:
   .byte GRUNT_COLOR,GRUNT_DIVE_COLOR,GRUNT_DIVE_COLOR,GRUNT_DIVE_COLOR,GRUNT_DIVE_COLOR,GRUNT_DIVE_COLOR,GRUNT_DIVE_COLOR,GRUNT_DIVE_COLOR,GRUNT_DIVE_COLOR,GRUNT_DIVE_COLOR
 enemy_explosion_sequence:
-  .byte ENEMY_EXPLOSION_SPRITE0_PTR,ENEMY_EXPLOSION_SPRITE1_PTR,ENEMY_EXPLOSION_SPRITE2_PTR
+  .byte ENEMY_EXPLOSION_SPRITE3_PTR,ENEMY_EXPLOSION_SPRITE0_PTR,ENEMY_EXPLOSION_SPRITE1_PTR,ENEMY_EXPLOSION_SPRITE2_PTR
 screen_row_lo:
   .for (var row = 0; row < 25; row++) {
     .byte <(SCREEN_RAM + (row * 40))
@@ -3420,3 +3443,290 @@ enemy_explosion_sprite2:
   .byte $00,$00,$00
   .byte $00,$00,$00
   .byte $00
+
+* = $3640 "Enemy Explosion Sprite 3"
+
+enemy_explosion_sprite3:
+  .byte $00,$00,$00
+  .byte $00,$00,$00
+  .byte $00,$08,$00
+  .byte $00,$78,$00
+  .byte $00,$fc,$00
+  .byte $07,$ff,$80
+  .byte $07,$ff,$c0
+  .byte $0f,$ff,$e0
+  .byte $03,$ff,$f0
+  .byte $07,$ff,$c0
+  .byte $07,$ff,$80
+  .byte $07,$ff,$c0
+  .byte $07,$3f,$c0
+  .byte $02,$10,$00
+  .byte $00,$00,$00
+  .byte $00,$00,$00
+  .byte $00,$00,$00
+  .byte $00,$00,$00
+  .byte $00,$00,$00
+  .byte $00,$00,$00
+  .byte $00,$00,$00
+  .byte $00
+
+* = $4700 "Explosion Frame Routines"
+
+set_slot_explosion_frame:
+  tax
+  jsr slot_reserved_for_player_bottom
+  bcs set_slot_explosion_skip
+  ldy slot_explosion_frame, x
+  lda enemy_explosion_sequence, y
+  sta enemy_explosion_pointer
+  txa
+  beq set_slot_explosion_frame0
+  cmp #$01
+  beq set_slot_explosion_frame1
+  cmp #$02
+  beq set_slot_explosion_frame2
+  cmp #$03
+  beq set_slot_explosion_frame3
+  cmp #$04
+  beq set_slot_explosion_frame4
+  jmp set_slot_explosion_frame5
+set_slot_explosion_frame0:
+  jmp set_slot0_explosion_frame
+set_slot_explosion_frame1:
+  jmp set_slot1_explosion_frame
+set_slot_explosion_frame2:
+  jmp set_slot2_explosion_frame
+set_slot_explosion_frame3:
+  jmp set_slot3_explosion_frame
+set_slot_explosion_frame4:
+  jmp set_slot4_explosion_frame
+set_slot_explosion_frame5:
+  jmp set_slot5_explosion_frame
+set_slot_explosion_skip:
+  rts
+
+set_slot0_explosion_frame:
+  lda explosion_slot_x_lo, x
+  sta SPRITE0_X
+  lda explosion_slot_y, x
+  sta SPRITE0_Y
+  lda SPRITE_X_MSB
+  and #%11111110
+  ldy explosion_slot_x_hi, x
+  beq set_slot0_explosion_msb_done
+  ora #FORMATION_SLOT0_MASK
+set_slot0_explosion_msb_done:
+  sta SPRITE_X_MSB
+  lda SPRITE_MULTICOLOR
+  and #%11111110
+  sta SPRITE_MULTICOLOR
+  lda enemy_explosion_pointer
+  sta SPRITE_POINTERS
+  lda #ENEMY_EXPLOSION_COLOR
+  sta SPRITE0_COLOR
+  lda SPRITE_ENABLE
+  ora #FORMATION_SLOT0_MASK
+  sta SPRITE_ENABLE
+  rts
+
+set_slot1_explosion_frame:
+  lda explosion_slot_x_lo, x
+  sta SPRITE3_X
+  lda explosion_slot_y, x
+  sta SPRITE3_Y
+  lda SPRITE_X_MSB
+  and #%11110111
+  ldy explosion_slot_x_hi, x
+  beq set_slot1_explosion_msb_done
+  ora #FORMATION_SLOT1_MASK
+set_slot1_explosion_msb_done:
+  sta SPRITE_X_MSB
+  lda SPRITE_MULTICOLOR
+  and #%11110111
+  sta SPRITE_MULTICOLOR
+  lda enemy_explosion_pointer
+  sta SPRITE_POINTERS + 3
+  lda #ENEMY_EXPLOSION_COLOR
+  sta SPRITE3_COLOR
+  lda SPRITE_ENABLE
+  ora #FORMATION_SLOT1_MASK
+  sta SPRITE_ENABLE
+  rts
+
+set_slot2_explosion_frame:
+  lda explosion_slot_x_lo, x
+  sta SPRITE4_X
+  lda explosion_slot_y, x
+  sta SPRITE4_Y
+  lda SPRITE_X_MSB
+  and #%11101111
+  ldy explosion_slot_x_hi, x
+  beq set_slot2_explosion_msb_done
+  ora #FORMATION_SLOT2_MASK
+set_slot2_explosion_msb_done:
+  sta SPRITE_X_MSB
+  lda SPRITE_MULTICOLOR
+  and #%11101111
+  sta SPRITE_MULTICOLOR
+  lda enemy_explosion_pointer
+  sta SPRITE_POINTERS + 4
+  lda #ENEMY_EXPLOSION_COLOR
+  sta SPRITE4_COLOR
+  lda SPRITE_ENABLE
+  ora #FORMATION_SLOT2_MASK
+  sta SPRITE_ENABLE
+  rts
+
+set_slot3_explosion_frame:
+  lda explosion_slot_x_lo, x
+  sta SPRITE5_X
+  lda explosion_slot_y, x
+  sta SPRITE5_Y
+  lda SPRITE_X_MSB
+  and #%11011111
+  ldy explosion_slot_x_hi, x
+  beq set_slot3_explosion_msb_done
+  ora #FORMATION_SLOT3_MASK
+set_slot3_explosion_msb_done:
+  sta SPRITE_X_MSB
+  lda SPRITE_MULTICOLOR
+  and #%11011111
+  sta SPRITE_MULTICOLOR
+  lda enemy_explosion_pointer
+  sta SPRITE_POINTERS + 5
+  lda #ENEMY_EXPLOSION_COLOR
+  sta SPRITE5_COLOR
+  lda SPRITE_ENABLE
+  ora #FORMATION_SLOT3_MASK
+  sta SPRITE_ENABLE
+  rts
+
+set_slot4_explosion_frame:
+  lda explosion_slot_x_lo, x
+  sta SPRITE6_X
+  lda explosion_slot_y, x
+  sta SPRITE6_Y
+  lda SPRITE_X_MSB
+  and #%10111111
+  ldy explosion_slot_x_hi, x
+  beq set_slot4_explosion_msb_done
+  ora #FORMATION_SLOT4_MASK
+set_slot4_explosion_msb_done:
+  sta SPRITE_X_MSB
+  lda SPRITE_MULTICOLOR
+  and #%10111111
+  sta SPRITE_MULTICOLOR
+  lda enemy_explosion_pointer
+  sta SPRITE_POINTERS + 6
+  lda #ENEMY_EXPLOSION_COLOR
+  sta SPRITE6_COLOR
+  lda SPRITE_ENABLE
+  ora #FORMATION_SLOT4_MASK
+  sta SPRITE_ENABLE
+  rts
+
+set_slot5_explosion_frame:
+  lda explosion_slot_x_lo, x
+  sta SPRITE7_X
+  lda explosion_slot_y, x
+  sta SPRITE7_Y
+  lda SPRITE_X_MSB
+  and #%01111111
+  ldy explosion_slot_x_hi, x
+  beq set_slot5_explosion_msb_done
+  ora #FORMATION_SLOT5_MASK
+set_slot5_explosion_msb_done:
+  sta SPRITE_X_MSB
+  lda SPRITE_MULTICOLOR
+  and #%01111111
+  sta SPRITE_MULTICOLOR
+  lda enemy_explosion_pointer
+  sta SPRITE_POINTERS + 7
+  lda #ENEMY_EXPLOSION_COLOR
+  sta SPRITE7_COLOR
+  lda SPRITE_ENABLE
+  ora #FORMATION_SLOT5_MASK
+  sta SPRITE_ENABLE
+  rts
+
+store_slot_explosion_position:
+  tax
+  lda dive_active
+  beq store_slot_explosion_position_formation
+  cpx dive_slot
+  bne store_slot_explosion_position_formation
+
+  lda dive_x_lo
+  sta explosion_slot_x_lo, x
+  lda dive_x_hi
+  sta explosion_slot_x_hi, x
+  lda dive_y
+  sta explosion_slot_y, x
+  rts
+
+store_slot_explosion_position_formation:
+  txa
+  beq store_slot0_explosion_position
+  cmp #$01
+  beq store_slot1_explosion_position
+  cmp #$02
+  beq store_slot2_explosion_position
+  cmp #$03
+  beq store_slot3_explosion_position
+  cmp #$04
+  beq store_slot4_explosion_position
+  jmp store_slot5_explosion_position
+
+store_slot0_explosion_position:
+  lda formation_slot0_x_lo
+  sta explosion_slot_x_lo, x
+  lda formation_slot0_x_hi
+  sta explosion_slot_x_hi, x
+  lda #FORMATION_TOP_Y
+  sta explosion_slot_y, x
+  rts
+
+store_slot1_explosion_position:
+  lda formation_slot1_x_lo
+  sta explosion_slot_x_lo, x
+  lda formation_slot1_x_hi
+  sta explosion_slot_x_hi, x
+  lda #FORMATION_TOP_Y
+  sta explosion_slot_y, x
+  rts
+
+store_slot2_explosion_position:
+  lda formation_slot2_x_lo
+  sta explosion_slot_x_lo, x
+  lda formation_slot2_x_hi
+  sta explosion_slot_x_hi, x
+  lda #FORMATION_MID_Y
+  sta explosion_slot_y, x
+  rts
+
+store_slot3_explosion_position:
+  lda formation_slot3_x_lo
+  sta explosion_slot_x_lo, x
+  lda formation_slot3_x_hi
+  sta explosion_slot_x_hi, x
+  lda #FORMATION_MID_Y
+  sta explosion_slot_y, x
+  rts
+
+store_slot4_explosion_position:
+  lda formation_slot4_x_lo
+  sta explosion_slot_x_lo, x
+  lda formation_slot4_x_hi
+  sta explosion_slot_x_hi, x
+  lda #FORMATION_BOTTOM_Y
+  sta explosion_slot_y, x
+  rts
+
+store_slot5_explosion_position:
+  lda formation_slot5_x_lo
+  sta explosion_slot_x_lo, x
+  lda formation_slot5_x_hi
+  sta explosion_slot_x_hi, x
+  lda #FORMATION_BOTTOM_Y
+  sta explosion_slot_y, x
+  rts

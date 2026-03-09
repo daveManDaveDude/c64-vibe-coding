@@ -514,6 +514,9 @@ class Playtester:
         shot_active = None
         if "shot_active" in self.symbols:
             shot_active = self.monitor.mem_get(self.symbols["shot_active"], 1)[0] != 0
+        player_respawn_timer = None
+        if "player_respawn_timer" in self.symbols:
+            player_respawn_timer = self.monitor.mem_get(self.symbols["player_respawn_timer"], 1)[0]
 
         def vic(offset: int) -> int:
             return vic_data[offset - SPRITE0_X]
@@ -528,6 +531,7 @@ class Playtester:
 
         msb = vic(SPRITE_X_MSB)
         sprite_enable = vic(SPRITE_ENABLE)
+        shot_sprite_enabled = (sprite_enable & SHOT_SPRITE_MASK) != 0
         slot_rows = [
             self.symbols.get("FORMATION_TOP_Y", vic(SPRITE0_Y)),
             self.symbols.get("FORMATION_TOP_Y", vic(SPRITE0_Y)),
@@ -554,10 +558,12 @@ class Playtester:
             "formation_y": min(active_formation_rows) if active_formation_rows else vic(SPRITE0_Y),
             "shot_x": combine_sprite_x(vic(SPRITE2_X), msb, 2),
             "shot_y": vic(SPRITE2_Y),
+            "shot_active": shot_active if shot_active is not None else shot_sprite_enabled,
+            "player_respawn_timer": player_respawn_timer,
             "sprite_enable": sprite_enable,
             "sprite_x_msb": msb,
             "player_enabled": (sprite_enable & 0x02) != 0,
-            "shot_enabled": shot_active if shot_active is not None else (sprite_enable & SHOT_SPRITE_MASK) != 0,
+            "shot_enabled": shot_sprite_enabled,
             "dive_active": dive_active,
             "dive_slot": dive_slot,
             "formation_0_enabled": (sprite_enable & 0x01) != 0,
@@ -636,7 +642,7 @@ class Playtester:
             previous = first
             moved = False
             stable_samples = 0
-            for _ in range(12):
+            for _ in range(16):
                 self.resume_for(1.0)
                 current = self.capture_sample(f"{name}-hold")
                 delta = current["player_x"] - previous["player_x"]
@@ -648,6 +654,12 @@ class Playtester:
                     stable_samples = 0
                 elif delta == 0:
                     stable_samples += 1
+                elif (moving_left and delta > 80) or (not moving_left and delta < -80):
+                    self.logger.log(
+                        f"Detected a respawn-sized reset during {name} clamp; restarting clamp tracking"
+                    )
+                    moved = False
+                    stable_samples = 0
                 else:
                     raise PlaytestFailure(
                         f"{name}_unexpected_player_direction: previous={previous} current={current}"
@@ -726,6 +738,9 @@ class Playtester:
     def formation_alive_count(self, sample):
         return len(self.live_formation_slots(sample))
 
+    def total_formation_alive_count(self, sample):
+        return sum(1 for slot in self.formation_slots(sample) if slot["alive"])
+
     def leftmost_formation_x(self, sample):
         live_slots = self.live_formation_slots(sample)
         if not live_slots:
@@ -785,7 +800,7 @@ class Playtester:
     def align_player_with_formation_slot(self, preferred_index: int = 5):
         self.logger.log("Aligning the player ship under a live formation slot before firing")
         last_detail = None
-        for _ in range(12):
+        for _ in range(20):
             current = self.capture_sample("align-check", include_joystick=False)
             target_slot = self.choose_target_slot(current, preferred_index=preferred_index)
             target_x = current[f"formation_{target_slot}_x"]
@@ -820,7 +835,7 @@ class Playtester:
             self.assert_true(
                 f"fire_{attempt}_shot_spawned",
                 launched["shot_enabled"]
-                or self.formation_alive_count(launched) < INITIAL_FORMATION_ALIVE_COUNT,
+                or self.total_formation_alive_count(launched) < INITIAL_FORMATION_ALIVE_COUNT,
                 launched,
             )
             return launched
@@ -846,7 +861,7 @@ class Playtester:
                 self.resume_for(0.2)
                 watch_sample = self.capture_sample(f"fire-{attempt}-watch", include_joystick=False)
                 attempt_detail["shot_seen"] = attempt_detail["shot_seen"] or watch_sample["shot_enabled"]
-                if self.formation_alive_count(watch_sample) == initial_alive_count - 1:
+                if self.total_formation_alive_count(watch_sample) == initial_alive_count - 1:
                     attempt_detail["result"] = "hit"
                     attempt_detail["destroyed_slots"] = [
                         slot["index"] for slot in self.formation_slots(watch_sample) if not slot["alive"]
@@ -873,7 +888,7 @@ class Playtester:
         follow_up = self.capture_sample("gap-check", include_joystick=False)
         self.assert_true(
             "gap_alive_count",
-            self.formation_alive_count(follow_up) == INITIAL_FORMATION_ALIVE_COUNT - 1,
+            self.total_formation_alive_count(follow_up) == INITIAL_FORMATION_ALIVE_COUNT - 1,
             follow_up,
         )
         current_destroyed_slots = [
@@ -986,7 +1001,7 @@ class Playtester:
             "formation_direction_samples": bounce_state["deltas"],
             "shot_attempts": hit_state["attempt"],
             "destroyed_slots": hit_state["destroyed_slots"],
-            "alive_slots_after_hit": self.formation_alive_count(gap_state),
+            "alive_slots_after_hit": self.total_formation_alive_count(gap_state),
             "captured_frame_count": len(captured_hashes),
             "host_screenshots_enabled": self.args.capture_host_screenshots,
         }
