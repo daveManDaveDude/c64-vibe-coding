@@ -502,6 +502,15 @@ class Playtester:
         alive_data = None
         if "formation_slot0_alive" in self.symbols:
             alive_data = self.monitor.mem_get(self.symbols["formation_slot0_alive"], INITIAL_FORMATION_ALIVE_COUNT)
+        formation_position_data = None
+        if "formation_slot0_x_lo" in self.symbols:
+            formation_position_data = self.monitor.mem_get(self.symbols["formation_slot0_x_lo"], INITIAL_FORMATION_ALIVE_COUNT * 2)
+        dive_active = False
+        dive_slot = None
+        if "dive_active" in self.symbols:
+            dive_active = self.monitor.mem_get(self.symbols["dive_active"], 1)[0] != 0
+        if "dive_slot" in self.symbols:
+            dive_slot = self.monitor.mem_get(self.symbols["dive_slot"], 1)[0]
         shot_active = None
         if "shot_active" in self.symbols:
             shot_active = self.monitor.mem_get(self.symbols["shot_active"], 1)[0] != 0
@@ -509,24 +518,48 @@ class Playtester:
         def vic(offset: int) -> int:
             return vic_data[offset - SPRITE0_X]
 
+        def formation_slot_x(index: int) -> int:
+            if formation_position_data is None:
+                sprite_offsets = [SPRITE0_X, SPRITE3_X, SPRITE4_X, SPRITE5_X, SPRITE6_X, SPRITE7_X]
+                sprite_bits = [0, 3, 4, 5, 6, 7]
+                return combine_sprite_x(vic(sprite_offsets[index]), msb, sprite_bits[index])
+            base = index * 2
+            return formation_position_data[base] | (formation_position_data[base + 1] << 8)
+
         msb = vic(SPRITE_X_MSB)
         sprite_enable = vic(SPRITE_ENABLE)
+        slot_rows = [
+            self.symbols.get("FORMATION_TOP_Y", vic(SPRITE0_Y)),
+            self.symbols.get("FORMATION_TOP_Y", vic(SPRITE0_Y)),
+            self.symbols.get("FORMATION_MID_Y", vic(SPRITE4_Y)),
+            self.symbols.get("FORMATION_MID_Y", vic(SPRITE4_Y)),
+            self.symbols.get("FORMATION_BOTTOM_Y", vic(SPRITE6_Y)),
+            self.symbols.get("FORMATION_BOTTOM_Y", vic(SPRITE6_Y)),
+        ]
+        active_formation_rows = [
+            slot_rows[index]
+            for index in range(INITIAL_FORMATION_ALIVE_COUNT)
+            if (alive_data[index] != 0 if alive_data is not None else True)
+            and not (dive_active and dive_slot == index)
+        ]
         state = {
             "player_x": combine_sprite_x(vic(SPRITE1_X), msb, 1),
             "player_y": vic(SPRITE1_Y),
-            "formation_0_x": combine_sprite_x(vic(SPRITE0_X), msb, 0),
-            "formation_1_x": combine_sprite_x(vic(SPRITE3_X), msb, 3),
-            "formation_2_x": combine_sprite_x(vic(SPRITE4_X), msb, 4),
-            "formation_3_x": combine_sprite_x(vic(SPRITE5_X), msb, 5),
-            "formation_4_x": combine_sprite_x(vic(SPRITE6_X), msb, 6),
-            "formation_5_x": combine_sprite_x(vic(SPRITE7_X), msb, 7),
-            "formation_y": vic(SPRITE0_Y),
+            "formation_0_x": formation_slot_x(0),
+            "formation_1_x": formation_slot_x(1),
+            "formation_2_x": formation_slot_x(2),
+            "formation_3_x": formation_slot_x(3),
+            "formation_4_x": formation_slot_x(4),
+            "formation_5_x": formation_slot_x(5),
+            "formation_y": min(active_formation_rows) if active_formation_rows else vic(SPRITE0_Y),
             "shot_x": combine_sprite_x(vic(SPRITE2_X), msb, 2),
             "shot_y": vic(SPRITE2_Y),
             "sprite_enable": sprite_enable,
             "sprite_x_msb": msb,
             "player_enabled": (sprite_enable & 0x02) != 0,
             "shot_enabled": shot_active if shot_active is not None else (sprite_enable & SHOT_SPRITE_MASK) != 0,
+            "dive_active": dive_active,
+            "dive_slot": dive_slot,
             "formation_0_enabled": (sprite_enable & 0x01) != 0,
             "formation_1_enabled": (sprite_enable & 0x08) != 0,
             "formation_2_enabled": (sprite_enable & 0x10) != 0,
@@ -684,7 +717,11 @@ class Playtester:
         ]
 
     def live_formation_slots(self, sample):
-        return [slot for slot in self.formation_slots(sample) if slot["alive"]]
+        return [
+            slot
+            for slot in self.formation_slots(sample)
+            if slot["alive"] and not (sample.get("dive_active") and sample.get("dive_slot") == slot["index"])
+        ]
 
     def formation_alive_count(self, sample):
         return len(self.live_formation_slots(sample))

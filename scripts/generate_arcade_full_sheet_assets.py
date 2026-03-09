@@ -8,7 +8,6 @@ from generate_arcade_enemy_sprites import (
     GRAY_SEPARATOR,
     ROW_LABELS,
     decode_png_rgba,
-    fit_color_rows_to_sprite_grid,
     format_byte_rows,
     full_sheet_segments,
     generate_sprite_rows,
@@ -100,10 +99,57 @@ def fit_singlecolor_rows_to_sprite_grid(
             f"Singlecolor layer {source_width}x{source_height} exceeds C64 sprite grid {target_width}x{target_height}"
         )
 
+    target_x_start = (target_width - source_width) // 2
     fitted = [[0 for _ in range(target_width)] for _ in range(target_height)]
     for y in range(source_height):
         for x in range(source_width):
-            fitted[y][x] = bit_rows[y][x]
+            fitted[y][target_x_start + x] = bit_rows[y][x]
+    return fitted
+
+
+def fit_fullsheet_multicolor_rows_to_sprite_grid(
+    color_rows: list[list[int]],
+    target_width: int = 12,
+    target_height: int = 21,
+) -> list[list[int]]:
+    source_height = len(color_rows)
+    source_width = len(color_rows[0])
+
+    if source_height > target_height:
+        raise ValueError(
+            f"Source sprite height {source_height} exceeds C64 multicolor sprite height {target_height}"
+        )
+
+    min_x = source_width
+    max_x = -1
+    for row in color_rows:
+        for x, code in enumerate(row):
+            if code == 0:
+                continue
+            min_x = min(min_x, x)
+            max_x = max(max_x, x)
+
+    fitted = [[0 for _ in range(target_width)] for _ in range(target_height)]
+    if max_x < 0:
+        return fitted
+
+    if source_width <= target_width:
+        source_x_start = 0
+        copy_width = source_width
+    else:
+        content_width = max_x - min_x + 1
+        if content_width > target_width:
+            raise ValueError(
+                f"Source sprite content width {content_width} exceeds C64 multicolor sprite width {target_width}"
+            )
+        source_x_start = min_x
+        copy_width = content_width
+
+    target_x_start = (target_width - copy_width) // 2
+    for y in range(source_height):
+        for x in range(copy_width):
+            fitted[y][target_x_start + x] = color_rows[y][source_x_start + x]
+
     return fitted
 
 
@@ -178,7 +224,7 @@ def build_multicolor_layer(
             codes.append(slot_for_color[nearest_c64_color(pixel)])
         color_rows.append(codes)
 
-    fitted = fit_color_rows_to_sprite_grid(color_rows)
+    fitted = fit_fullsheet_multicolor_rows_to_sprite_grid(color_rows)
     packed = pack_multicolor_sprite_bytes(fitted)
     layer = {
         "label": label,

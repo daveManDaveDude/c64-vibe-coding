@@ -4,15 +4,18 @@ from pathlib import Path
 
 from preview_c64_sprites import (
     C64_COLORS,
-    decode_multicolor,
     decode_singlecolor,
     load_source,
     parse_asm_sprites,
-    render_svg,
 )
 
-
-def render_composite(output_path: Path, base_bytes: list[int], overlay_bytes: list[int], scale: int) -> None:
+def render_composite(
+    output_path: Path,
+    red_bytes: list[int],
+    white_bytes: list[int],
+    cyan_bytes: list[int],
+    scale: int,
+) -> None:
     sprite_width = 24
     sprite_height = 21
     title_height = scale * 3
@@ -42,29 +45,18 @@ def render_composite(output_path: Path, base_bytes: list[int], overlay_bytes: li
         ),
     ]
 
-    base_rows = decode_singlecolor(base_bytes)
-    for y, row in enumerate(base_rows):
-        for x, bit in enumerate(row):
-            if bit:
-                lines.append(
-                    f'    <rect x="{padding + x * scale}" y="{padding + title_height + y * scale}" '
-                    f'width="{scale}" height="{scale}" fill="{C64_COLORS[15]}"/>'
-                )
-
-    overlay_rows = decode_multicolor(overlay_bytes)
-    overlay_colors = {
-        1: C64_COLORS[6],
-        2: C64_COLORS[15],
-        3: C64_COLORS[2],
-    }
-    for y, row in enumerate(overlay_rows):
-        for x, code in enumerate(row):
-            fill = overlay_colors.get(code)
-            if fill:
-                lines.append(
-                    f'    <rect x="{padding + x * scale * 2}" y="{padding + title_height + y * scale}" '
-                    f'width="{scale * 2}" height="{scale}" fill="{fill}"/>'
-                )
+    for rows, color in (
+        (decode_singlecolor(cyan_bytes), C64_COLORS[3]),
+        (decode_singlecolor(red_bytes), C64_COLORS[2]),
+        (decode_singlecolor(white_bytes), C64_COLORS[15]),
+    ):
+        for y, row in enumerate(rows):
+            for x, bit in enumerate(row):
+                if bit:
+                    lines.append(
+                        f'    <rect x="{padding + x * scale}" y="{padding + title_height + y * scale}" '
+                        f'width="{scale}" height="{scale}" fill="{color}"/>'
+                    )
 
     lines.extend(["  </g>", "</svg>"])
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -81,13 +73,14 @@ def main() -> int:
     sprites = dict(
         parse_asm_sprites(
             load_source(Path(args.source)),
-            {"player_sprite_png", "player_overlay_sprite_png"},
+            {"player_red_sprite_png", "player_white_sprite_png", "player_cyan_sprite_png"},
         )
     )
     render_composite(
         Path(args.out),
-        sprites["player_sprite_png"],
-        sprites["player_overlay_sprite_png"],
+        sprites["player_red_sprite_png"],
+        sprites["player_white_sprite_png"],
+        sprites["player_cyan_sprite_png"],
         args.scale,
     )
     print(f"Wrote {args.out}")

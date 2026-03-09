@@ -46,8 +46,9 @@ debug-sprites:
 	python3 scripts/generate_arcade_full_sheet_assets.py
 	python3 scripts/generate_player_sprite.py
 	python3 scripts/debug_sprite_frames.py --grouped
-	python3 scripts/debug_sprite_frames.py src/generated_player_sprite.asm --labels player_sprite_png --mode singlecolor
-	python3 scripts/debug_sprite_frames.py src/generated_player_sprite.asm --labels player_overlay_sprite_png --mode multicolor
+	python3 scripts/debug_sprite_frames.py src/generated_player_sprite.asm --labels player_red_sprite_png --mode singlecolor
+	python3 scripts/debug_sprite_frames.py src/generated_player_sprite.asm --labels player_white_sprite_png --mode singlecolor
+	python3 scripts/debug_sprite_frames.py src/generated_player_sprite.asm --labels player_cyan_sprite_png --mode singlecolor
 	python3 scripts/preview_c64_sprites.py
 	python3 scripts/preview_player_sprite.py
 
