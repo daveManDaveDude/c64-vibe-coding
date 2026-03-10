@@ -11,6 +11,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import Optional
 
 
 API_VERSION = 0x02
@@ -53,6 +54,11 @@ PLAYER_SPRITE_MASK = 0x02
 INITIAL_EXPECTED_SPRITES = FORMATION_SPRITES_MASK | PLAYER_SPRITE_MASK
 SHOT_SPRITE_MASK = 0x04
 INITIAL_FORMATION_ALIVE_COUNT = 6
+FORMATION_RENDERER_SPRITE = 0
+FORMATION_RENDERER_NAMES = {
+    0: "sprite",
+    1: "char",
+}
 
 
 class PlaytestFailure(Exception):
@@ -179,6 +185,12 @@ class BinaryMonitor:
 
 def combine_sprite_x(low: int, msb_register: int, bit_index: int) -> int:
     return low | (((msb_register >> bit_index) & 0x01) << 8)
+
+
+def describe_renderer_mode(mode: Optional[int]) -> Optional[str]:
+    if mode is None:
+        return None
+    return FORMATION_RENDERER_NAMES.get(mode, f"unknown-{mode}")
 
 
 class MacOSGui:
@@ -502,6 +514,9 @@ class Playtester:
         alive_data = None
         if "formation_slot0_alive" in self.symbols:
             alive_data = self.monitor.mem_get(self.symbols["formation_slot0_alive"], INITIAL_FORMATION_ALIVE_COUNT)
+        formation_renderer_mode = FORMATION_RENDERER_SPRITE
+        if "formation_renderer_mode" in self.symbols:
+            formation_renderer_mode = self.monitor.mem_get(self.symbols["formation_renderer_mode"], 1)[0]
         formation_position_data = None
         if "formation_slot0_x_lo" in self.symbols:
             formation_position_data = self.monitor.mem_get(self.symbols["formation_slot0_x_lo"], INITIAL_FORMATION_ALIVE_COUNT * 2)
@@ -564,6 +579,8 @@ class Playtester:
             "sprite_x_msb": msb,
             "player_enabled": (sprite_enable & 0x02) != 0,
             "shot_enabled": shot_sprite_enabled,
+            "formation_renderer_mode": formation_renderer_mode,
+            "formation_renderer_mode_name": describe_renderer_mode(formation_renderer_mode),
             "dive_active": dive_active,
             "dive_slot": dive_slot,
             "formation_0_enabled": (sprite_enable & 0x01) != 0,
@@ -625,6 +642,14 @@ class Playtester:
             ):
                 return latest
         raise PlaytestFailure(f"Timed out waiting for the game shell to appear: {latest}")
+
+    def assert_sprite_renderer_mode(self, name: str, sample):
+        self.assert_true(
+            name,
+            sample["formation_renderer_mode"] == FORMATION_RENDERER_SPRITE
+            or sample["formation_renderer_mode_name"] == "sprite",
+            sample,
+        )
 
     def drive_until_clamp(self, name: str, key_code: int, joystick_mask: int, moving_left: bool):
         direction_word = "left" if moving_left else "right"
@@ -929,6 +954,7 @@ class Playtester:
             initial["sprite_enable"] & INITIAL_EXPECTED_SPRITES == INITIAL_EXPECTED_SPRITES,
             initial,
         )
+        self.assert_sprite_renderer_mode("initial_renderer_mode", initial)
         self.record_step("initial_state", "passed", initial)
 
         left_clamp = self.drive_until_clamp("left", LEFT_KEY_CODE, LEFT_MASK, moving_left=True)
@@ -998,6 +1024,8 @@ class Playtester:
         self.results["summary"] = {
             "left_clamp_x": left_clamp["player_x"],
             "right_clamp_x": right_clamp["player_x"],
+            "formation_renderer_mode": initial["formation_renderer_mode"],
+            "formation_renderer_mode_name": initial["formation_renderer_mode_name"],
             "formation_direction_samples": bounce_state["deltas"],
             "shot_attempts": hit_state["attempt"],
             "destroyed_slots": hit_state["destroyed_slots"],
