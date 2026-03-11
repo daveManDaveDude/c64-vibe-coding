@@ -33,6 +33,7 @@ PLAYER_OVERLAY_BIN="src/generated_player_overlay.bin"
 PLAYER_EXTRA_BIN="src/generated_player_extra.bin"
 PLAYER_EXPLOSION_ASM="src/generated_player_explosion.asm"
 PLAYER_EXPLOSION_BIN="src/generated_player_explosion.bin"
+FORMATION_CHAR_BIN="src/generated_formation_char_bitmap.bin"
 
 if [ ! -f "$SPRITE_ASM" ] || [ ! -f "$SPRITE_BIN" ] || [ "$SPRITE_PNG" -nt "$SPRITE_ASM" ] || [ "$SPRITE_PNG" -nt "$SPRITE_BIN" ]; then
   python3 scripts/generate_arcade_enemy_sprites.py
@@ -48,6 +49,10 @@ fi
 
 if [ ! -f "$PLAYER_EXPLOSION_ASM" ] || [ ! -f "$PLAYER_EXPLOSION_BIN" ] || [ "$PLAYER_EXPLOSION_PNG" -nt "$PLAYER_EXPLOSION_ASM" ] || [ "$PLAYER_EXPLOSION_PNG" -nt "$PLAYER_EXPLOSION_BIN" ]; then
   python3 scripts/generate_player_explosion_sprites.py
+fi
+
+if [ ! -f "$FORMATION_CHAR_BIN" ] || [ "$SPRITE_BIN" -nt "$FORMATION_CHAR_BIN" ] || [ "scripts/generate_formation_char_bitmap.py" -nt "$FORMATION_CHAR_BIN" ]; then
+  python3 scripts/generate_formation_char_bitmap.py
 fi
 
 scripts/install_kickassembler.sh
