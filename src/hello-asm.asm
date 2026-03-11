@@ -1609,6 +1609,12 @@ store_dive_slot0_done:
   sta SPRITE_POINTERS
   lda dive_sprite_color
   sta SPRITE0_COLOR
+  lda SPRITE_MULTICOLOR
+  ora #FORMATION_SLOT0_MASK
+  sta SPRITE_MULTICOLOR
+  lda SPRITE_ENABLE
+  ora #FORMATION_SLOT0_MASK
+  sta SPRITE_ENABLE
   rts
 
 store_dive_slot1:
@@ -1627,6 +1633,12 @@ store_dive_slot1_done:
   sta SPRITE_POINTERS + 3
   lda dive_sprite_color
   sta SPRITE3_COLOR
+  lda SPRITE_MULTICOLOR
+  ora #FORMATION_SLOT1_MASK
+  sta SPRITE_MULTICOLOR
+  lda SPRITE_ENABLE
+  ora #FORMATION_SLOT1_MASK
+  sta SPRITE_ENABLE
   rts
 
 store_dive_slot2:
@@ -1645,6 +1657,12 @@ store_dive_slot2_done:
   sta SPRITE_POINTERS + 4
   lda dive_sprite_color
   sta SPRITE4_COLOR
+  lda SPRITE_MULTICOLOR
+  ora #FORMATION_SLOT2_MASK
+  sta SPRITE_MULTICOLOR
+  lda SPRITE_ENABLE
+  ora #FORMATION_SLOT2_MASK
+  sta SPRITE_ENABLE
   rts
 
 store_dive_slot3:
@@ -1663,6 +1681,12 @@ store_dive_slot3_done:
   sta SPRITE_POINTERS + 5
   lda dive_sprite_color
   sta SPRITE5_COLOR
+  lda SPRITE_MULTICOLOR
+  ora #FORMATION_SLOT3_MASK
+  sta SPRITE_MULTICOLOR
+  lda SPRITE_ENABLE
+  ora #FORMATION_SLOT3_MASK
+  sta SPRITE_ENABLE
   rts
 
 store_dive_slot4:
@@ -1681,6 +1705,12 @@ store_dive_slot4_done:
   sta SPRITE_POINTERS + 6
   lda dive_sprite_color
   sta SPRITE6_COLOR
+  lda SPRITE_MULTICOLOR
+  ora #FORMATION_SLOT4_MASK
+  sta SPRITE_MULTICOLOR
+  lda SPRITE_ENABLE
+  ora #FORMATION_SLOT4_MASK
+  sta SPRITE_ENABLE
   rts
 
 store_dive_slot5:
@@ -1699,6 +1729,12 @@ store_dive_slot5_done:
   sta SPRITE_POINTERS + 7
   lda dive_sprite_color
   sta SPRITE7_COLOR
+  lda SPRITE_MULTICOLOR
+  ora #FORMATION_SLOT5_MASK
+  sta SPRITE_MULTICOLOR
+  lda SPRITE_ENABLE
+  ora #FORMATION_SLOT5_MASK
+  sta SPRITE_ENABLE
   rts
 
 select_dive_animation_frame:
