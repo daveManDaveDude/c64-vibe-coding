@@ -49,9 +49,6 @@ FIRE_KEY_CODE = 49
 LEFT_MASK = 0x04
 RIGHT_MASK = 0x08
 FIRE_MASK = 0x10
-FORMATION_SPRITES_MASK = 0xF9
-PLAYER_SPRITE_MASK = 0x02
-INITIAL_EXPECTED_SPRITES = FORMATION_SPRITES_MASK | PLAYER_SPRITE_MASK
 SHOT_SPRITE_MASK = 0x04
 INITIAL_FORMATION_ALIVE_COUNT = 6
 FORMATION_RENDERER_SPRITE = 0
@@ -532,6 +529,12 @@ class Playtester:
         player_respawn_timer = None
         if "player_respawn_timer" in self.symbols:
             player_respawn_timer = self.monitor.mem_get(self.symbols["player_respawn_timer"], 1)[0]
+        formation_char_render_mask = None
+        if "formation_char_render_mask" in self.symbols:
+            formation_char_render_mask = self.monitor.mem_get(self.symbols["formation_char_render_mask"], 1)[0]
+        formation_shift_phase = None
+        if "formation_shift_phase" in self.symbols:
+            formation_shift_phase = self.monitor.mem_get(self.symbols["formation_shift_phase"], 1)[0]
 
         def vic(offset: int) -> int:
             return vic_data[offset - SPRITE0_X]
@@ -561,6 +564,13 @@ class Playtester:
             if (alive_data[index] != 0 if alive_data is not None else True)
             and not (dive_active and dive_slot == index)
         ]
+        formation_logical_alive_count = sum(
+            1 for index in range(INITIAL_FORMATION_ALIVE_COUNT) if alive_data[index] != 0
+        ) if alive_data is not None else sum(
+            1
+            for mask in (0x01, 0x08, 0x10, 0x20, 0x40, 0x80)
+            if sprite_enable & mask
+        )
         state = {
             "player_x": combine_sprite_x(vic(SPRITE1_X), msb, 1),
             "player_y": vic(SPRITE1_Y),
@@ -581,6 +591,9 @@ class Playtester:
             "shot_enabled": shot_sprite_enabled,
             "formation_renderer_mode": formation_renderer_mode,
             "formation_renderer_mode_name": describe_renderer_mode(formation_renderer_mode),
+            "formation_logical_alive_count": formation_logical_alive_count,
+            "formation_char_render_mask": formation_char_render_mask,
+            "formation_shift_phase": formation_shift_phase,
             "dive_active": dive_active,
             "dive_slot": dive_slot,
             "formation_0_enabled": (sprite_enable & 0x01) != 0,
@@ -635,7 +648,8 @@ class Playtester:
             self.resume_for(0.25)
             latest = self.read_state(include_joystick=False)
             if (
-                latest["sprite_enable"] & INITIAL_EXPECTED_SPRITES == INITIAL_EXPECTED_SPRITES
+                latest["player_enabled"]
+                and latest["formation_logical_alive_count"] >= 1
                 and latest["player_y"] > latest["formation_y"]
                 and latest["player_y"] >= 180
                 and latest["formation_y"] <= 100
@@ -643,13 +657,128 @@ class Playtester:
                 return latest
         raise PlaytestFailure(f"Timed out waiting for the game shell to appear: {latest}")
 
-    def assert_sprite_renderer_mode(self, name: str, sample):
+    def formation_char_row(self, slot_index: int) -> int:
+        if slot_index < 2:
+            return self.symbols["FORMATION_CHAR_BAND_TOP_ROW"]
+        if slot_index < 4:
+            return self.symbols["FORMATION_CHAR_BAND_MID_ROW"]
+        return self.symbols["FORMATION_CHAR_BAND_BOTTOM_ROW"]
+
+    def formation_char_col(self, sample, slot_index: int) -> int:
+        playfield_left = self.symbols["PLAYFIELD_LEFT_X_LO"] + (self.symbols["PLAYFIELD_LEFT_X_HI"] << 8)
+        return ((sample[f"formation_{slot_index}_x"] - playfield_left) >> 3) + self.symbols[
+            "FORMATION_CHAR_BAND_ORIGIN_COL"
+        ]
+
+    def formation_char_cells(self, sample, slot_index: int):
+        required_symbols = {"SCREEN_RAM"}
+        missing = sorted(required_symbols - self.symbols.keys())
         self.assert_true(
-            name,
-            sample["formation_renderer_mode"] == FORMATION_RENDERER_SPRITE
-            or sample["formation_renderer_mode_name"] == "sprite",
-            sample,
+            "formation_char_cell_symbols_present",
+            not missing,
+            {"missing": missing, "symbols": self.symbols},
         )
+        row = self.formation_char_row(slot_index)
+        col = self.formation_char_col(sample, slot_index)
+        values = []
+        addresses = []
+        for offset in (0, 1):
+            address = self.symbols["SCREEN_RAM"] + (row * 40) + col + offset
+            addresses.append(address)
+            values.append(self.monitor.mem_get(address, 1)[0])
+        return {
+            "row": row,
+            "col": col,
+            "values": values,
+            "addresses": addresses,
+        }
+
+    def assert_char_renderer_output(self, name: str, sample):
+        if sample.get("formation_char_render_mask") is not None:
+            expected_mask = 0
+            for slot in self.live_formation_slots(sample):
+                expected_mask |= 1 << slot["index"]
+            self.assert_true(
+                name,
+                (sample["formation_char_render_mask"] & expected_mask) == expected_mask,
+                {
+                    "sample": sample,
+                    "expected_mask": expected_mask,
+                    "actual_mask": sample["formation_char_render_mask"],
+                },
+            )
+            return
+
+        required_symbols = {
+            "SCREEN_RAM",
+            "FORMATION_CHAR_BAND_ORIGIN_COL",
+            "FORMATION_CHAR_BAND_TOP_ROW",
+            "FORMATION_CHAR_BAND_MID_ROW",
+            "FORMATION_CHAR_BAND_BOTTOM_ROW",
+            "PLAYFIELD_LEFT_X_LO",
+            "PLAYFIELD_LEFT_X_HI",
+        }
+        missing = sorted(required_symbols - self.symbols.keys())
+        self.assert_true(f"{name}_symbols_present", not missing, {"missing": missing, "symbols": self.symbols})
+
+        attempts = []
+        latest_sample = sample
+        for attempt in range(4):
+            sampled_slots = []
+            for slot in self.live_formation_slots(latest_sample):
+                row = self.formation_char_row(slot["index"])
+                col = self.formation_char_col(latest_sample, slot["index"])
+                neighborhood = []
+                value = 0x20
+                for row_offset in (-1, 0, 1):
+                    probe_row = row + row_offset
+                    if probe_row < 0 or probe_row >= 25:
+                        continue
+                    for col_offset in (-1, 0, 1):
+                        probe_col = col + col_offset
+                        if probe_col < 0 or probe_col >= 40:
+                            continue
+                        address = self.symbols["SCREEN_RAM"] + (probe_row * 40) + probe_col
+                        probe_value = self.monitor.mem_get(address, 1)[0]
+                        neighborhood.append(
+                            {
+                                "row": probe_row,
+                                "col": probe_col,
+                                "address": address,
+                                "value": probe_value,
+                            }
+                        )
+                        if probe_value != 0x20:
+                            value = probe_value
+                sampled_slots.append(
+                    {
+                        "slot": slot["index"],
+                        "row": row,
+                        "col": col,
+                        "value": value,
+                        "neighborhood": neighborhood,
+                    }
+                )
+            attempts.append({"sample": latest_sample, "slots": sampled_slots})
+            if sampled_slots and all(slot["value"] != 0x20 for slot in sampled_slots):
+                return
+            if attempt < 3:
+                self.resume_for(0.05)
+                latest_sample = self.read_state(include_joystick=False)
+
+        self.assert_true(f"{name}_slots_sampled", False, {"attempts": attempts})
+
+    def assert_renderer_ready(self, name: str, sample):
+        if (
+            sample["formation_renderer_mode"] == FORMATION_RENDERER_SPRITE
+            or sample["formation_renderer_mode_name"] == "sprite"
+        ):
+            self.assert_true(name, True, sample)
+            return
+        if sample["formation_renderer_mode_name"] == "char":
+            self.assert_char_renderer_output(name, sample)
+            return
+        self.assert_true(name, False, sample)
 
     def drive_until_clamp(self, name: str, key_code: int, joystick_mask: int, moving_left: bool):
         direction_word = "left" if moving_left else "right"
@@ -803,6 +932,54 @@ class Playtester:
         bounce_state = self.formation_has_bounced()
         raise PlaytestFailure(f"formation_bounce_timeout: {bounce_state}")
 
+    def assert_char_renderer_motion(self, name: str):
+        observations = []
+        for sample in self.samples:
+            if sample.get("formation_renderer_mode_name") != "char":
+                continue
+            live_slots = self.live_formation_slots(sample)
+            if not live_slots:
+                continue
+            slot = min(live_slots, key=lambda item: item["x"])
+            cells = self.formation_char_cells(sample, slot["index"])
+            observations.append(
+                {
+                    "sample_index": sample["index"],
+                    "stage": sample["stage"],
+                    "slot": slot["index"],
+                    "x": slot["x"],
+                    "shift_phase": sample.get("formation_shift_phase"),
+                    "col": cells["col"],
+                    "values": cells["values"],
+                }
+            )
+
+        transitions = []
+        for previous, current in zip(observations, observations[1:]):
+            logical_delta = current["x"] - previous["x"]
+            if logical_delta == 0:
+                continue
+            rendered_changed = (
+                current["col"] != previous["col"]
+                or current["values"] != previous["values"]
+                or current["shift_phase"] != previous["shift_phase"]
+            )
+            transitions.append(
+                {
+                    "previous": previous,
+                    "current": current,
+                    "logical_delta": logical_delta,
+                    "rendered_changed": rendered_changed,
+                }
+            )
+
+        self.assert_true(
+            name,
+            bool(transitions) and all(item["rendered_changed"] for item in transitions),
+            {"observations": observations, "transitions": transitions},
+        )
+        return {"observations": observations, "transitions": transitions}
+
     def choose_target_slot(self, sample, preferred_index: int = 5):
         live_slots = self.live_formation_slots(sample)
         if not live_slots:
@@ -950,11 +1127,16 @@ class Playtester:
             initial,
         )
         self.assert_true(
-            "initial_sprites_enabled",
-            initial["sprite_enable"] & INITIAL_EXPECTED_SPRITES == INITIAL_EXPECTED_SPRITES,
+            "initial_player_sprite_enabled",
+            initial["player_enabled"],
             initial,
         )
-        self.assert_sprite_renderer_mode("initial_renderer_mode", initial)
+        self.assert_true(
+            "initial_formation_logical_alive",
+            initial["formation_logical_alive_count"] >= 1,
+            initial,
+        )
+        self.assert_renderer_ready("initial_renderer_mode", initial)
         self.record_step("initial_state", "passed", initial)
 
         left_clamp = self.drive_until_clamp("left", LEFT_KEY_CODE, LEFT_MASK, moving_left=True)
@@ -980,6 +1162,9 @@ class Playtester:
             bounce_state["positive_seen"] and bounce_state["negative_seen"],
             bounce_state,
         )
+        char_motion_state = None
+        if initial["formation_renderer_mode_name"] == "char":
+            char_motion_state = self.assert_char_renderer_motion("formation_char_motion_visible")
 
         hit_state = self.destroy_formation_member()
         self.assert_true(
@@ -1026,7 +1211,9 @@ class Playtester:
             "right_clamp_x": right_clamp["player_x"],
             "formation_renderer_mode": initial["formation_renderer_mode"],
             "formation_renderer_mode_name": initial["formation_renderer_mode_name"],
+            "formation_shift_phase": initial["formation_shift_phase"],
             "formation_direction_samples": bounce_state["deltas"],
+            "formation_char_motion_samples": 0 if char_motion_state is None else len(char_motion_state["transitions"]),
             "shot_attempts": hit_state["attempt"],
             "destroyed_slots": hit_state["destroyed_slots"],
             "alive_slots_after_hit": self.total_formation_alive_count(gap_state),

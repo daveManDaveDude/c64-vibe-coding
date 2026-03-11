@@ -13,6 +13,13 @@ fi
 
 EXTRA_ARGS=("$@")
 
+if [ "${FORMATION_RENDERER:-sprite}" = "char" ]; then
+  EXTRA_ARGS=("-define" "FORMATION_CHAR_RENDERER")
+  if [ "$#" -gt 0 ]; then
+    EXTRA_ARGS+=("$@")
+  fi
+fi
+
 SPRITE_PNG="ArcadeGalaxianSprites.png"
 PLAYER_EXPLOSION_PNG="ArcadeGalaxianSprites explosions.png"
 SPRITE_ASM="src/generated_enemy_sprites.asm"

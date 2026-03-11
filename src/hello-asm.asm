@@ -84,6 +84,8 @@ BasicUpstart2(start)
 .label FORMATION_MIN_X_HI = $00
 .label FORMATION_MAX_X_LO = $1c
 .label FORMATION_MAX_X_HI = $01
+.label FORMATION_CHAR_MAX_X_LO = $24
+.label FORMATION_CHAR_MAX_X_HI = $01
 .label FORMATION_SLOT0_OFFSET = 0
 .label FORMATION_SLOT1_OFFSET = 36
 .label FORMATION_SLOT2_OFFSET = 0
@@ -154,6 +156,19 @@ BasicUpstart2(start)
 .label FORMATION_ANIMATION_SHIFT = 5
 .label FORMATION_RENDERER_MODE_SPRITE = $00
 .label FORMATION_RENDERER_MODE_CHAR = $01
+#if FORMATION_CHAR_RENDERER
+  .label FORMATION_DEFAULT_RENDERER_MODE = FORMATION_RENDERER_MODE_CHAR
+#else
+  .label FORMATION_DEFAULT_RENDERER_MODE = FORMATION_RENDERER_MODE_SPRITE
+#endif
+.label FORMATION_CHAR_BASE = 96
+.label FORMATION_CHAR_SLOT_STRIDE = 4
+.label FORMATION_CHAR_BAND_ORIGIN_COL = 0
+.label FORMATION_CHAR_BAND_WIDTH = 40
+.label FORMATION_CHAR_BAND_HEIGHT = 5
+.label FORMATION_CHAR_BAND_TOP_ROW = 6
+.label FORMATION_CHAR_BAND_MID_ROW = 8
+.label FORMATION_CHAR_BAND_BOTTOM_ROW = 10
 .label DIVE_SLOT_NONE = $ff
 .label DIVE_DIRECTION_LEFT = $00
 .label DIVE_DIRECTION_RIGHT = $01
@@ -166,7 +181,7 @@ BasicUpstart2(start)
 .label DIVE_ANIMATION_MAX_FRAME = 9
 .label DIVE_FIRE_HOLD_TICKS = 10
 .label ENEMY_BULLET_LIMIT = 2
-.label ENEMY_BULLET_CHAR_BASE = 64
+.label ENEMY_BULLET_CHAR_BASE = 192
 .label ENEMY_BULLET_COLOR = $01
 .label ENEMY_BULLET_SPEED = 2
 .label ENEMY_BULLET_START_X_OFFSET = 11
@@ -233,6 +248,7 @@ main_loop:
   jsr update_formation
   jsr update_dive_attack
   jsr update_enemy_hit_animations
+  jsr render_formation_if_char_mode
   jsr update_enemy_fire
   jmp main_loop
 
@@ -496,8 +512,10 @@ init_formation:
   rts
 
 init_formation_renderer:
-  lda #FORMATION_RENDERER_MODE_SPRITE
+  lda formation_renderer_requested_mode
+  and #$01
   sta formation_renderer_mode
+  lda #$00
   sta SPRITE_X_MSB
   sta SPRITE_PRIORITY
   sta SPRITE_X_EXPAND
@@ -533,6 +551,8 @@ init_formation_renderer:
 
   lda #FORMATION_SPRITE_MASK
   sta SPRITE_ENABLE
+  jsr clear_formation_char_band
+  jsr clear_formation_char_glyphs
   rts
 
 init_player:
@@ -739,10 +759,21 @@ raster_irq_top_phase:
   sta SPRITE_MULTICOLOR_1
   lda #$00
   sta player_extra_visible
+  lda formation_renderer_mode
+  cmp #FORMATION_RENDERER_MODE_SPRITE
+  bne raster_irq_done
   jsr render_formation
 
 raster_irq_done:
   jmp $ea81
+
+render_formation_if_char_mode:
+  lda formation_renderer_mode
+  cmp #FORMATION_RENDERER_MODE_CHAR
+  bne render_formation_if_char_mode_done
+  jsr render_formation
+render_formation_if_char_mode_done:
+  rts
 
 wait_frame:
   lda #$ff
@@ -1019,13 +1050,19 @@ effects_done:
 update_formation:
   lda game_state
   cmp #GAME_STATE_PLAYING
-  bne formation_done
+  beq update_formation_active
+  jmp formation_done
+
+update_formation_active:
 
   inc formation_frame
   jsr update_formation_animation_state
   lda formation_frame
   and #$01
-  bne formation_done
+  beq formation_move_tick
+  jmp formation_done
+
+formation_move_tick:
 
   lda formation_dir
   bpl formation_move_right
@@ -1060,6 +1097,9 @@ formation_move_right:
   inc formation_x_hi
 
 formation_check_max:
+  lda formation_renderer_mode
+  cmp #FORMATION_RENDERER_MODE_CHAR
+  beq formation_check_char_max
   lda formation_x_hi
   cmp #FORMATION_MAX_X_HI
   bcc formation_store_x
@@ -1067,11 +1107,30 @@ formation_check_max:
   lda formation_x_lo
   cmp #FORMATION_MAX_X_LO
   bcc formation_store_x
+  jmp formation_clamp_max
+
+formation_check_char_max:
+  lda formation_x_hi
+  cmp #FORMATION_CHAR_MAX_X_HI
+  bcc formation_store_x
+  bne formation_clamp_char_max
+  lda formation_x_lo
+  cmp #FORMATION_CHAR_MAX_X_LO
+  bcc formation_store_x
 
 formation_clamp_max:
   lda #FORMATION_MAX_X_LO
   sta formation_x_lo
   lda #FORMATION_MAX_X_HI
+  sta formation_x_hi
+  lda #$ff
+  sta formation_dir
+  jmp formation_store_x
+
+formation_clamp_char_max:
+  lda #FORMATION_CHAR_MAX_X_LO
+  sta formation_x_lo
+  lda #FORMATION_CHAR_MAX_X_HI
   sta formation_x_hi
   lda #$ff
   sta formation_dir
@@ -2857,6 +2916,12 @@ update_formation_slot_positions:
   lda formation_x_hi
   adc #$00
   sta formation_slot5_x_hi
+
+  lda formation_x_lo
+  sec
+  sbc #PLAYFIELD_LEFT_X_LO
+  and #%00000111
+  sta formation_shift_phase
   rts
 
 store_player_x:
@@ -3427,7 +3492,7 @@ render_formation:
   lda formation_renderer_mode
   cmp #FORMATION_RENDERER_MODE_SPRITE
   beq render_formation_sprite
-  rts
+  jmp render_formation_char
 
 render_formation_sprite:
   ldx #$00
@@ -3693,7 +3758,414 @@ disable_formation_sprite_slot5:
   sta SPRITE_ENABLE
   rts
 
-* = $4700 "Main Data"
+render_formation_char:
+  lda #$00
+  sta formation_char_render_mask_pending
+  jsr clear_formation_char_band
+  ldx #$00
+  jsr render_formation_char_slot0_state
+  ldx #$01
+  jsr render_formation_char_slot1_state
+  ldx #$02
+  jsr render_formation_char_slot2_state
+  ldx #$03
+  jsr render_formation_char_slot3_state
+  ldx #$04
+  jsr render_formation_char_slot4_state
+  ldx #$05
+  jsr render_formation_char_slot5_state
+  lda formation_char_render_mask_pending
+  sta formation_char_render_mask
+  rts
+
+render_formation_char_slot0_state:
+  lda dive_active
+  beq render_formation_char_slot0_check_explosion
+  lda dive_slot
+  beq render_formation_char_slot0_dive
+render_formation_char_slot0_check_explosion:
+  lda slot_explosion_timer
+  beq render_formation_char_slot0_check_alive
+  lda #$00
+  jsr set_slot_explosion_frame
+  rts
+render_formation_char_slot0_check_alive:
+  lda formation_slot0_alive
+  beq render_formation_char_slot0_disable
+  jsr disable_formation_sprite_slot0
+  jmp draw_formation_char_slot0
+render_formation_char_slot0_dive:
+  jsr store_dive_position
+  rts
+render_formation_char_slot0_disable:
+  jmp disable_formation_sprite_slot0
+
+render_formation_char_slot1_state:
+  lda dive_active
+  beq render_formation_char_slot1_check_explosion
+  lda dive_slot
+  cmp #$01
+  beq render_formation_char_slot1_dive
+render_formation_char_slot1_check_explosion:
+  lda slot_explosion_timer + 1
+  beq render_formation_char_slot1_check_alive
+  lda #$01
+  jsr set_slot_explosion_frame
+  rts
+render_formation_char_slot1_check_alive:
+  lda formation_slot1_alive
+  beq render_formation_char_slot1_disable
+  jsr disable_formation_sprite_slot1
+  jmp draw_formation_char_slot1
+render_formation_char_slot1_dive:
+  jsr store_dive_position
+  rts
+render_formation_char_slot1_disable:
+  jmp disable_formation_sprite_slot1
+
+render_formation_char_slot2_state:
+  lda dive_active
+  beq render_formation_char_slot2_check_explosion
+  lda dive_slot
+  cmp #$02
+  beq render_formation_char_slot2_dive
+render_formation_char_slot2_check_explosion:
+  lda slot_explosion_timer + 2
+  beq render_formation_char_slot2_check_alive
+  lda #$02
+  jsr set_slot_explosion_frame
+  rts
+render_formation_char_slot2_check_alive:
+  lda formation_slot2_alive
+  beq render_formation_char_slot2_disable
+  jsr disable_formation_sprite_slot2
+  jmp draw_formation_char_slot2
+render_formation_char_slot2_dive:
+  jsr store_dive_position
+  rts
+render_formation_char_slot2_disable:
+  jmp disable_formation_sprite_slot2
+
+render_formation_char_slot3_state:
+  lda dive_active
+  beq render_formation_char_slot3_check_explosion
+  lda dive_slot
+  cmp #$03
+  beq render_formation_char_slot3_dive
+render_formation_char_slot3_check_explosion:
+  lda slot_explosion_timer + 3
+  beq render_formation_char_slot3_check_alive
+  lda #$03
+  jsr set_slot_explosion_frame
+  rts
+render_formation_char_slot3_check_alive:
+  lda formation_slot3_alive
+  beq render_formation_char_slot3_disable
+  jsr disable_formation_sprite_slot3
+  jmp draw_formation_char_slot3
+render_formation_char_slot3_dive:
+  jsr store_dive_position
+  rts
+render_formation_char_slot3_disable:
+  jmp disable_formation_sprite_slot3
+
+render_formation_char_slot4_state:
+  lda dive_active
+  beq render_formation_char_slot4_check_explosion
+  lda dive_slot
+  cmp #$04
+  beq render_formation_char_slot4_dive
+render_formation_char_slot4_check_explosion:
+  lda slot_explosion_timer + 4
+  beq render_formation_char_slot4_check_alive
+  lda #$04
+  jsr set_slot_explosion_frame
+  rts
+render_formation_char_slot4_check_alive:
+  lda formation_slot4_alive
+  beq render_formation_char_slot4_disable
+  jsr disable_formation_sprite_slot4
+  jmp draw_formation_char_slot4
+render_formation_char_slot4_dive:
+  jsr store_dive_position
+  rts
+render_formation_char_slot4_disable:
+  jmp disable_formation_sprite_slot4
+
+render_formation_char_slot5_state:
+  lda dive_active
+  beq render_formation_char_slot5_check_explosion
+  lda dive_slot
+  cmp #$05
+  beq render_formation_char_slot5_dive
+render_formation_char_slot5_check_explosion:
+  lda slot_explosion_timer + 5
+  beq render_formation_char_slot5_check_alive
+  lda #$05
+  jsr set_slot_explosion_frame
+  rts
+render_formation_char_slot5_check_alive:
+  lda formation_slot5_alive
+  beq render_formation_char_slot5_disable
+  jsr disable_formation_sprite_slot5
+  jmp draw_formation_char_slot5
+render_formation_char_slot5_dive:
+  jsr store_dive_position
+  rts
+render_formation_char_slot5_disable:
+  jmp disable_formation_sprite_slot5
+
+draw_formation_char_slot0:
+  ldy formation_anim_index
+  lda flagship_char_animation_sequence, y
+  sta formation_char_value
+  lda formation_slot0_x_lo
+  sta formation_char_slot_x_lo
+  lda formation_slot0_x_hi
+  sta formation_char_slot_x_hi
+  lda #FLAGSHIP_COLOR
+  sta formation_char_color
+  ldy #FORMATION_CHAR_BAND_TOP_ROW
+  jsr draw_formation_char_slot_common
+  lda formation_char_render_mask_pending
+  ora #%00000001
+  sta formation_char_render_mask_pending
+  rts
+
+draw_formation_char_slot1:
+  ldy formation_anim_index
+  lda flagship_char_animation_sequence, y
+  sta formation_char_value
+  lda formation_slot1_x_lo
+  sta formation_char_slot_x_lo
+  lda formation_slot1_x_hi
+  sta formation_char_slot_x_hi
+  lda #FLAGSHIP_COLOR
+  sta formation_char_color
+  ldy #FORMATION_CHAR_BAND_TOP_ROW
+  jsr draw_formation_char_slot_common
+  lda formation_char_render_mask_pending
+  ora #%00000010
+  sta formation_char_render_mask_pending
+  rts
+
+draw_formation_char_slot2:
+  ldy formation_anim_index
+  lda escort_char_animation_sequence, y
+  sta formation_char_value
+  lda formation_slot2_x_lo
+  sta formation_char_slot_x_lo
+  lda formation_slot2_x_hi
+  sta formation_char_slot_x_hi
+  lda #ESCORT_COLOR
+  sta formation_char_color
+  ldy #FORMATION_CHAR_BAND_MID_ROW
+  jsr draw_formation_char_slot_common
+  lda formation_char_render_mask_pending
+  ora #%00000100
+  sta formation_char_render_mask_pending
+  rts
+
+draw_formation_char_slot3:
+  ldy formation_anim_index
+  lda escort_char_animation_sequence, y
+  sta formation_char_value
+  lda formation_slot3_x_lo
+  sta formation_char_slot_x_lo
+  lda formation_slot3_x_hi
+  sta formation_char_slot_x_hi
+  lda #ESCORT_COLOR
+  sta formation_char_color
+  ldy #FORMATION_CHAR_BAND_MID_ROW
+  jsr draw_formation_char_slot_common
+  lda formation_char_render_mask_pending
+  ora #%00001000
+  sta formation_char_render_mask_pending
+  rts
+
+draw_formation_char_slot4:
+  ldy formation_anim_index
+  lda grunt_char_animation_sequence, y
+  sta formation_char_value
+  lda formation_slot4_x_lo
+  sta formation_char_slot_x_lo
+  lda formation_slot4_x_hi
+  sta formation_char_slot_x_hi
+  lda #GRUNT_COLOR
+  sta formation_char_color
+  ldy #FORMATION_CHAR_BAND_BOTTOM_ROW
+  jsr draw_formation_char_slot_common
+  lda formation_char_render_mask_pending
+  ora #%00010000
+  sta formation_char_render_mask_pending
+  rts
+
+draw_formation_char_slot5:
+  ldy formation_anim_index
+  lda grunt_char_animation_sequence, y
+  sta formation_char_value
+  lda formation_slot5_x_lo
+  sta formation_char_slot_x_lo
+  lda formation_slot5_x_hi
+  sta formation_char_slot_x_hi
+  lda #GRUNT_COLOR
+  sta formation_char_color
+  ldy #FORMATION_CHAR_BAND_BOTTOM_ROW
+  jsr draw_formation_char_slot_common
+  lda formation_char_render_mask_pending
+  ora #%00100000
+  sta formation_char_render_mask_pending
+  rts
+
+draw_formation_char_slot_common:
+  sty formation_char_row
+
+  lda formation_char_slot_x_lo
+  sec
+  sbc #PLAYFIELD_LEFT_X_LO
+  sta formation_char_relative_lo
+  lda formation_char_slot_x_hi
+  sbc #PLAYFIELD_LEFT_X_HI
+  sta formation_char_relative_hi
+
+  lda formation_char_relative_lo
+  and #%00000111
+  sta formation_char_shift_phase_local
+
+  lsr formation_char_relative_hi
+  ror formation_char_relative_lo
+  lsr formation_char_relative_hi
+  ror formation_char_relative_lo
+  lsr formation_char_relative_hi
+  ror formation_char_relative_lo
+
+  lda formation_char_relative_lo
+  clc
+  adc #FORMATION_CHAR_BAND_ORIGIN_COL
+  sta formation_char_col
+
+  jsr update_formation_char_slot_glyphs
+
+  ldy formation_char_row
+  lda screen_row_lo, y
+  sta SCREEN_PTR
+  lda screen_row_hi, y
+  sta SCREEN_PTR + 1
+  lda color_row_lo, y
+  sta COLOR_PTR
+  lda color_row_hi, y
+  sta COLOR_PTR + 1
+
+  ldy formation_char_col
+  lda formation_char_glyph_base
+  sta (SCREEN_PTR), y
+  lda formation_char_color
+  sta (COLOR_PTR), y
+
+  iny
+  lda formation_char_glyph_base
+  clc
+  adc #$01
+  sta (SCREEN_PTR), y
+  lda formation_char_color
+  sta (COLOR_PTR), y
+
+  iny
+  lda formation_char_glyph_base
+  clc
+  adc #$02
+  sta (SCREEN_PTR), y
+  lda formation_char_color
+  sta (COLOR_PTR), y
+
+  iny
+  lda formation_char_glyph_base
+  clc
+  adc #$03
+  sta (SCREEN_PTR), y
+  lda formation_char_color
+  sta (COLOR_PTR), y
+  rts
+
+update_formation_char_slot_glyphs:
+  txa
+  asl
+  asl
+  clc
+  adc #FORMATION_CHAR_BASE
+  sta formation_char_glyph_base
+
+  txa
+  asl
+  asl
+  asl
+  asl
+  asl
+  sta COLOR_PTR
+  lda #>(CHARSET_RAM + (FORMATION_CHAR_BASE * 8))
+  sta COLOR_PTR + 1
+
+  lda formation_char_value
+  clc
+  adc #>formation_bitmap_shifted_frames
+  sta SCREEN_PTR + 1
+  lda formation_char_shift_phase_local
+  asl
+  asl
+  asl
+  asl
+  asl
+  sta SCREEN_PTR
+
+  ldy #$00
+update_formation_char_slot_glyphs_loop:
+  lda (SCREEN_PTR), y
+  sta (COLOR_PTR), y
+  iny
+  cpy #$20
+  bcc update_formation_char_slot_glyphs_loop
+  rts
+
+clear_formation_char_glyphs:
+  ldy #$00
+clear_formation_char_glyphs_loop:
+  lda #$00
+  sta CHARSET_RAM + (FORMATION_CHAR_BASE * 8), y
+  iny
+  cpy #(FORMATION_CHAR_SLOT_STRIDE * 6 * 8)
+  bcc clear_formation_char_glyphs_loop
+  rts
+
+clear_formation_char_band:
+  ldx #$00
+clear_formation_char_band_loop:
+  lda formation_char_band_rows, x
+  tay
+  lda screen_row_lo, y
+  sta SCREEN_PTR
+  lda screen_row_hi, y
+  sta SCREEN_PTR + 1
+  lda color_row_lo, y
+  sta COLOR_PTR
+  lda color_row_hi, y
+  sta COLOR_PTR + 1
+
+  ldy #FORMATION_CHAR_BAND_ORIGIN_COL
+clear_formation_char_band_row_loop:
+  lda #$20
+  sta (SCREEN_PTR), y
+  lda #PLAYFIELD_TEXT_COLOR
+  sta (COLOR_PTR), y
+  iny
+  cpy #(FORMATION_CHAR_BAND_ORIGIN_COL + FORMATION_CHAR_BAND_WIDTH)
+  bcc clear_formation_char_band_row_loop
+
+  inx
+  cpx #FORMATION_CHAR_BAND_HEIGHT
+  bcc clear_formation_char_band_loop
+  rts
+
+* = $4d40 "Main Data"
 
 formation_x_lo:
   .byte FORMATION_START_X_LO
@@ -3819,6 +4291,10 @@ formation_anim_index:
   .byte $00
 formation_renderer_mode:
   .byte $00
+formation_renderer_requested_mode:
+  .byte FORMATION_DEFAULT_RENDERER_MODE
+formation_shift_phase:
+  .byte $00
 game_state:
   .byte GAME_STATE_READY
 game_state_timer:
@@ -3901,6 +4377,30 @@ enemy_bullet_col:
   .byte $00
 enemy_bullet_char:
   .byte $00
+formation_char_value:
+  .byte $00
+formation_char_glyph_base:
+  .byte $00
+formation_char_color:
+  .byte $00
+formation_char_row:
+  .byte $00
+formation_char_col:
+  .byte $00
+formation_char_slot_x_lo:
+  .byte $00
+formation_char_slot_x_hi:
+  .byte $00
+formation_char_relative_lo:
+  .byte $00
+formation_char_relative_hi:
+  .byte $00
+formation_char_shift_phase_local:
+  .byte $00
+formation_char_render_mask_pending:
+  .byte $00
+formation_char_render_mask:
+  .byte $00
 enemy_explosion_pointer:
   .byte $00
 cpu_port_backup:
@@ -3949,6 +4449,18 @@ grunt_dive_animation_colors:
   .byte GRUNT_COLOR,GRUNT_DIVE_COLOR,GRUNT_DIVE_COLOR,GRUNT_DIVE_COLOR,GRUNT_DIVE_COLOR,GRUNT_DIVE_COLOR,GRUNT_DIVE_COLOR,GRUNT_DIVE_COLOR,GRUNT_DIVE_COLOR,GRUNT_DIVE_COLOR
 enemy_explosion_sequence:
   .byte ENEMY_EXPLOSION_SPRITE3_PTR,ENEMY_EXPLOSION_SPRITE0_PTR,ENEMY_EXPLOSION_SPRITE1_PTR,ENEMY_EXPLOSION_SPRITE2_PTR
+formation_char_band_rows:
+  .byte FORMATION_CHAR_BAND_TOP_ROW,FORMATION_CHAR_BAND_TOP_ROW + 1,FORMATION_CHAR_BAND_MID_ROW,FORMATION_CHAR_BAND_MID_ROW + 1,FORMATION_CHAR_BAND_BOTTOM_ROW
+formation_char_row_table:
+  .byte FORMATION_CHAR_BAND_TOP_ROW,FORMATION_CHAR_BAND_TOP_ROW,FORMATION_CHAR_BAND_MID_ROW,FORMATION_CHAR_BAND_MID_ROW,FORMATION_CHAR_BAND_BOTTOM_ROW,FORMATION_CHAR_BAND_BOTTOM_ROW
+formation_char_color_table:
+  .byte FLAGSHIP_COLOR,FLAGSHIP_COLOR,ESCORT_COLOR,ESCORT_COLOR,GRUNT_COLOR,GRUNT_COLOR
+flagship_char_animation_sequence:
+  .byte $00,$01,$00,$01
+escort_char_animation_sequence:
+  .byte $02,$03,$02,$03
+grunt_char_animation_sequence:
+  .byte $04,$05,$04,$05
 player_explosion_top_left_sequence:
   .byte PLAYER_EXPLOSION_PTR_BASE + 0,PLAYER_EXPLOSION_PTR_BASE + 4,PLAYER_EXPLOSION_PTR_BASE + 8,PLAYER_EXPLOSION_PTR_BASE + 12
 player_explosion_top_right_sequence:
@@ -3981,6 +4493,106 @@ color_row_hi:
   .for (var row = 0; row < 25; row++) {
     .byte >(COLOR_RAM + (row * 40))
   }
+
+* = $5300 "Formation Char Bitmap Data"
+
+formation_bitmap_shifted_frames:
+  .byte $00,$c0,$ff,$03,$57,$53,$40,$00,$cc,$cc,$ff,$bb,$ff,$ff,$fc,$30
+  .byte $00,$0c,$fc,$00,$54,$14,$04,$00,$00,$00,$00,$00,$00,$00,$00,$00
+  .byte $00,$60,$7f,$01,$2b,$29,$20,$00,$66,$66,$ff,$dd,$ff,$ff,$7e,$18
+  .byte $00,$06,$fe,$80,$aa,$8a,$02,$00,$00,$00,$00,$00,$00,$00,$00,$00
+  .byte $00,$30,$3f,$00,$15,$14,$10,$00,$33,$33,$ff,$ee,$ff,$ff,$3f,$0c
+  .byte $00,$03,$ff,$c0,$d5,$c5,$01,$00,$00,$00,$00,$00,$00,$00,$00,$00
+  .byte $00,$18,$1f,$00,$0a,$0a,$08,$00,$19,$19,$ff,$77,$ff,$7f,$1f,$06
+  .byte $80,$81,$ff,$60,$ea,$e2,$80,$00,$00,$80,$80,$00,$80,$80,$80,$00
+  .byte $00,$0c,$0f,$00,$05,$05,$04,$00,$0c,$0c,$ff,$3b,$7f,$3f,$0f,$03
+  .byte $c0,$c0,$ff,$b0,$f5,$f1,$c0,$00,$00,$c0,$c0,$00,$40,$40,$40,$00
+  .byte $00,$06,$07,$00,$02,$02,$02,$00,$06,$06,$ff,$1d,$bf,$9f,$07,$01
+  .byte $60,$60,$ff,$d8,$fa,$f8,$e0,$80,$00,$60,$e0,$00,$a0,$a0,$20,$00
+  .byte $00,$03,$03,$00,$01,$01,$01,$00,$03,$03,$ff,$0e,$5f,$4f,$03,$00
+  .byte $30,$30,$ff,$ec,$fd,$fc,$f0,$c0,$00,$30,$f0,$00,$50,$50,$10,$00
+  .byte $00,$01,$01,$00,$00,$00,$00,$00,$01,$81,$ff,$07,$af,$a7,$81,$00
+  .byte $98,$98,$ff,$76,$fe,$fe,$f8,$60,$00,$18,$f8,$00,$a8,$28,$08,$00
+  .byte $00,$00,$c3,$ff,$03,$15,$54,$50,$cc,$cc,$ff,$bb,$ff,$fd,$fc,$30
+  .byte $00,$00,$0c,$fc,$00,$50,$54,$14,$00,$00,$00,$00,$00,$00,$00,$00
+  .byte $00,$00,$61,$7f,$01,$0a,$2a,$28,$66,$66,$ff,$dd,$ff,$fe,$7e,$18
+  .byte $00,$00,$86,$fe,$80,$a8,$2a,$0a,$00,$00,$00,$00,$00,$00,$00,$00
+  .byte $00,$00,$30,$3f,$00,$05,$15,$14,$33,$33,$ff,$ee,$ff,$7f,$3f,$0c
+  .byte $00,$00,$c3,$ff,$c0,$54,$15,$05,$00,$00,$00,$00,$00,$00,$00,$00
+  .byte $00,$00,$18,$1f,$00,$02,$0a,$0a,$19,$19,$7f,$f7,$7f,$bf,$9f,$06
+  .byte $80,$80,$e1,$7f,$e0,$aa,$8a,$02,$00,$00,$80,$80,$00,$00,$80,$80
+  .byte $00,$00,$0c,$0f,$00,$01,$05,$05,$0c,$0c,$3f,$fb,$3f,$5f,$4f,$03
+  .byte $c0,$c0,$f0,$bf,$f0,$d5,$c5,$01,$00,$00,$c0,$c0,$00,$00,$40,$40
+  .byte $00,$00,$06,$07,$00,$00,$02,$02,$06,$06,$1f,$fd,$1f,$af,$a7,$81
+  .byte $60,$60,$f8,$df,$f8,$ea,$e2,$80,$00,$00,$60,$e0,$00,$80,$a0,$a0
+  .byte $00,$00,$03,$03,$00,$00,$01,$01,$03,$03,$0f,$fe,$0f,$57,$53,$40
+  .byte $30,$30,$fc,$ef,$fc,$f5,$f1,$c0,$00,$00,$30,$f0,$00,$40,$50,$50
+  .byte $00,$00,$01,$01,$00,$00,$00,$00,$01,$01,$87,$ff,$07,$2b,$a9,$a0
+  .byte $98,$98,$fe,$77,$fe,$fa,$f8,$60,$00,$00,$18,$f8,$00,$a0,$a8,$28
+  .byte $00,$80,$aa,$02,$56,$52,$40,$00,$88,$88,$aa,$ee,$aa,$aa,$a8,$20
+  .byte $00,$08,$a8,$00,$54,$14,$04,$00,$00,$00,$00,$00,$00,$00,$00,$00
+  .byte $00,$40,$55,$01,$2b,$29,$20,$00,$44,$44,$55,$77,$55,$55,$54,$10
+  .byte $00,$04,$54,$00,$2a,$0a,$02,$00,$00,$00,$00,$00,$00,$00,$00,$00
+  .byte $00,$20,$2a,$00,$15,$14,$10,$00,$22,$22,$aa,$bb,$aa,$aa,$2a,$08
+  .byte $00,$02,$aa,$80,$95,$85,$01,$00,$00,$00,$00,$00,$00,$00,$00,$00
+  .byte $00,$10,$15,$00,$0a,$0a,$08,$00,$11,$11,$55,$5d,$d5,$55,$15,$04
+  .byte $00,$01,$55,$c0,$4a,$42,$00,$00,$00,$00,$00,$00,$80,$80,$80,$00
+  .byte $00,$08,$0a,$00,$05,$05,$04,$00,$08,$08,$aa,$2e,$6a,$2a,$0a,$02
+  .byte $80,$80,$aa,$e0,$a5,$a1,$80,$00,$00,$80,$80,$00,$40,$40,$40,$00
+  .byte $00,$04,$05,$00,$02,$02,$02,$00,$04,$04,$55,$17,$b5,$95,$05,$01
+  .byte $40,$40,$55,$70,$52,$50,$40,$00,$00,$40,$40,$00,$a0,$a0,$20,$00
+  .byte $00,$02,$02,$00,$01,$01,$01,$00,$02,$02,$aa,$0b,$5a,$4a,$02,$00
+  .byte $20,$20,$aa,$b8,$a9,$a8,$a0,$80,$00,$20,$a0,$00,$50,$50,$10,$00
+  .byte $00,$01,$01,$00,$00,$00,$00,$00,$01,$01,$55,$05,$ad,$a5,$81,$00
+  .byte $10,$10,$55,$dc,$54,$54,$50,$40,$00,$10,$50,$00,$a8,$28,$08,$00
+  .byte $00,$00,$82,$aa,$02,$15,$54,$50,$88,$88,$aa,$ee,$aa,$a9,$a8,$20
+  .byte $00,$00,$08,$a8,$00,$50,$54,$14,$00,$00,$00,$00,$00,$00,$00,$00
+  .byte $00,$00,$41,$55,$01,$0a,$2a,$28,$44,$44,$55,$77,$55,$d4,$54,$10
+  .byte $00,$00,$04,$54,$00,$a8,$2a,$0a,$00,$00,$00,$00,$00,$00,$00,$00
+  .byte $00,$00,$20,$2a,$00,$05,$15,$14,$22,$22,$aa,$bb,$aa,$6a,$2a,$08
+  .byte $00,$00,$82,$aa,$80,$54,$15,$05,$00,$00,$00,$00,$00,$00,$00,$00
+  .byte $00,$00,$10,$15,$00,$02,$0a,$0a,$11,$11,$55,$5d,$55,$b5,$95,$04
+  .byte $00,$00,$41,$d5,$40,$2a,$0a,$02,$00,$00,$00,$00,$00,$00,$80,$80
+  .byte $00,$00,$08,$0a,$00,$01,$05,$05,$08,$08,$2a,$ae,$2a,$5a,$4a,$02
+  .byte $80,$80,$a0,$ea,$a0,$95,$85,$01,$00,$00,$80,$80,$00,$00,$40,$40
+  .byte $00,$00,$04,$05,$00,$00,$02,$02,$04,$04,$15,$57,$15,$ad,$a5,$81
+  .byte $40,$40,$50,$75,$50,$4a,$42,$00,$00,$00,$40,$40,$00,$80,$a0,$a0
+  .byte $00,$00,$02,$02,$00,$00,$01,$01,$02,$02,$0a,$ab,$0a,$56,$52,$40
+  .byte $20,$20,$a8,$ba,$a8,$a5,$a1,$80,$00,$00,$20,$a0,$00,$40,$50,$50
+  .byte $00,$00,$01,$01,$00,$00,$00,$00,$01,$01,$05,$55,$05,$2b,$a9,$a0
+  .byte $10,$10,$54,$dd,$54,$52,$50,$40,$00,$00,$10,$50,$00,$a0,$a8,$28
+  .byte $00,$80,$aa,$02,$56,$52,$40,$00,$88,$88,$aa,$ee,$aa,$aa,$a8,$20
+  .byte $00,$08,$a8,$00,$54,$14,$04,$00,$00,$00,$00,$00,$00,$00,$00,$00
+  .byte $00,$40,$55,$01,$2b,$29,$20,$00,$44,$44,$55,$77,$55,$55,$54,$10
+  .byte $00,$04,$54,$00,$2a,$0a,$02,$00,$00,$00,$00,$00,$00,$00,$00,$00
+  .byte $00,$20,$2a,$00,$15,$14,$10,$00,$22,$22,$aa,$bb,$aa,$aa,$2a,$08
+  .byte $00,$02,$aa,$80,$95,$85,$01,$00,$00,$00,$00,$00,$00,$00,$00,$00
+  .byte $00,$10,$15,$00,$0a,$0a,$08,$00,$11,$11,$55,$5d,$d5,$55,$15,$04
+  .byte $00,$01,$55,$c0,$4a,$42,$00,$00,$00,$00,$00,$00,$80,$80,$80,$00
+  .byte $00,$08,$0a,$00,$05,$05,$04,$00,$08,$08,$aa,$2e,$6a,$2a,$0a,$02
+  .byte $80,$80,$aa,$e0,$a5,$a1,$80,$00,$00,$80,$80,$00,$40,$40,$40,$00
+  .byte $00,$04,$05,$00,$02,$02,$02,$00,$04,$04,$55,$17,$b5,$95,$05,$01
+  .byte $40,$40,$55,$70,$52,$50,$40,$00,$00,$40,$40,$00,$a0,$a0,$20,$00
+  .byte $00,$02,$02,$00,$01,$01,$01,$00,$02,$02,$aa,$0b,$5a,$4a,$02,$00
+  .byte $20,$20,$aa,$b8,$a9,$a8,$a0,$80,$00,$20,$a0,$00,$50,$50,$10,$00
+  .byte $00,$01,$01,$00,$00,$00,$00,$00,$01,$01,$55,$05,$ad,$a5,$81,$00
+  .byte $10,$10,$55,$dc,$54,$54,$50,$40,$00,$10,$50,$00,$a8,$28,$08,$00
+  .byte $00,$00,$82,$aa,$02,$15,$54,$50,$88,$88,$aa,$ee,$aa,$a9,$a8,$20
+  .byte $00,$00,$08,$a8,$00,$50,$54,$14,$00,$00,$00,$00,$00,$00,$00,$00
+  .byte $00,$00,$41,$55,$01,$0a,$2a,$28,$44,$44,$55,$77,$55,$d4,$54,$10
+  .byte $00,$00,$04,$54,$00,$a8,$2a,$0a,$00,$00,$00,$00,$00,$00,$00,$00
+  .byte $00,$00,$20,$2a,$00,$05,$15,$14,$22,$22,$aa,$bb,$aa,$6a,$2a,$08
+  .byte $00,$00,$82,$aa,$80,$54,$15,$05,$00,$00,$00,$00,$00,$00,$00,$00
+  .byte $00,$00,$10,$15,$00,$02,$0a,$0a,$11,$11,$55,$5d,$55,$b5,$95,$04
+  .byte $00,$00,$41,$d5,$40,$2a,$0a,$02,$00,$00,$00,$00,$00,$00,$80,$80
+  .byte $00,$00,$08,$0a,$00,$01,$05,$05,$08,$08,$2a,$ae,$2a,$5a,$4a,$02
+  .byte $80,$80,$a0,$ea,$a0,$95,$85,$01,$00,$00,$80,$80,$00,$00,$40,$40
+  .byte $00,$00,$04,$05,$00,$00,$02,$02,$04,$04,$15,$57,$15,$ad,$a5,$81
+  .byte $40,$40,$50,$75,$50,$4a,$42,$00,$00,$00,$40,$40,$00,$80,$a0,$a0
+  .byte $00,$00,$02,$02,$00,$00,$01,$01,$02,$02,$0a,$ab,$0a,$56,$52,$40
+  .byte $20,$20,$a8,$ba,$a8,$a5,$a1,$80,$00,$00,$20,$a0,$00,$40,$50,$50
+  .byte $00,$00,$01,$01,$00,$00,$00,$00,$01,$01,$05,$55,$05,$2b,$a9,$a0
+  .byte $10,$10,$54,$dd,$54,$52,$50,$40,$00,$00,$10,$50,$00,$a0,$a8,$28
 
 * = $2480 "Arcade Sprites"
 
@@ -4167,7 +4779,7 @@ enemy_explosion_sprite3:
 player_explosion_sprites:
   .import binary "generated_player_explosion.bin"
 
-* = $4900 "Explosion Frame Routines"
+* = $4a00 "Explosion Frame Routines"
 
 set_slot_explosion_frame:
   tax
