@@ -535,6 +535,9 @@ class Playtester:
         formation_shift_phase = None
         if "formation_shift_phase" in self.symbols:
             formation_shift_phase = self.monitor.mem_get(self.symbols["formation_shift_phase"], 1)[0]
+        enemy_attack_active = None
+        if "enemy_attack_active" in self.symbols:
+            enemy_attack_active = self.monitor.mem_get(self.symbols["enemy_attack_active"], 1)[0] != 0
 
         def vic(offset: int) -> int:
             return vic_data[offset - SPRITE0_X]
@@ -594,6 +597,7 @@ class Playtester:
             "formation_logical_alive_count": formation_logical_alive_count,
             "formation_char_render_mask": formation_char_render_mask,
             "formation_shift_phase": formation_shift_phase,
+            "enemy_attack_active": enemy_attack_active,
             "dive_active": dive_active,
             "dive_slot": dive_slot,
             "formation_0_enabled": (sprite_enable & 0x01) != 0,
@@ -682,7 +686,7 @@ class Playtester:
         col = self.formation_char_col(sample, slot_index)
         values = []
         addresses = []
-        for offset in (0, 1):
+        for offset in range(4):
             address = self.symbols["SCREEN_RAM"] + (row * 40) + col + offset
             addresses.append(address)
             values.append(self.monitor.mem_get(address, 1)[0])
@@ -980,6 +984,42 @@ class Playtester:
         )
         return {"observations": observations, "transitions": transitions}
 
+    def assert_char_dive_handoff(self, name: str):
+        self.logger.log("Watching for a char-mode dive so the sprite handoff can be inspected")
+        observations = []
+        for index in range(24):
+            self.resume_for(0.35)
+            sample = self.capture_sample(f"dive-watch-{index}", include_joystick=False)
+            if not sample["dive_active"] or sample["dive_slot"] is None:
+                continue
+
+            dive_slot = sample["dive_slot"]
+            cells = self.formation_char_cells(sample, dive_slot)
+            detail = {
+                "sample": sample,
+                "dive_slot": dive_slot,
+                "sprite_enabled": sample[f"formation_{dive_slot}_enabled"],
+                "char_cells": cells,
+                "char_blank": all(value == 0x20 for value in cells["values"]),
+            }
+            observations.append(detail)
+
+            if len(observations) >= 3:
+                self.assert_true(
+                    f"{name}_sprite_enabled",
+                    all(item["sprite_enabled"] for item in observations),
+                    {"observations": observations},
+                )
+                self.assert_true(
+                    f"{name}_char_slot_blank",
+                    all(item["char_blank"] for item in observations),
+                    {"observations": observations},
+                )
+                self.record_step(name, "passed", {"observations": observations})
+                return {"observations": observations}
+
+        raise PlaytestFailure(f"{name}_timeout: {observations}")
+
     def choose_target_slot(self, sample, preferred_index: int = 5):
         live_slots = self.live_formation_slots(sample)
         if not live_slots:
@@ -1044,9 +1084,29 @@ class Playtester:
         finally:
             self.gui.key_up(FIRE_KEY_CODE)
 
+    def arm_enemy_attacks(self):
+        self.logger.log("Firing once to arm enemy dives before the char handoff check")
+        launch = self.fire_once(0)
+        self.assert_true(
+            "enemy_attack_armed",
+            bool(launch.get("enemy_attack_active")),
+            launch,
+        )
+
+        last_sample = launch
+        for _ in range(20):
+            if not last_sample["shot_enabled"]:
+                self.record_step("enemy_attack_armed", "passed", last_sample)
+                return last_sample
+            self.resume_for(0.15)
+            last_sample = self.capture_sample("enemy-attack-arm-watch", include_joystick=False)
+
+        self.record_step("enemy_attack_armed", "passed", last_sample)
+        return last_sample
+
     def destroy_formation_member(self):
         attempts = []
-        initial_alive_count = INITIAL_FORMATION_ALIVE_COUNT
+        initial_alive_count = self.total_formation_alive_count(self.read_state(include_joystick=False))
         for attempt in range(1, 5):
             alignment = self.align_player_with_formation_slot(preferred_index=5)
             launch = self.fire_once(attempt)
@@ -1163,8 +1223,11 @@ class Playtester:
             bounce_state,
         )
         char_motion_state = None
+        dive_handoff_state = None
         if initial["formation_renderer_mode_name"] == "char":
             char_motion_state = self.assert_char_renderer_motion("formation_char_motion_visible")
+            self.arm_enemy_attacks()
+            dive_handoff_state = self.assert_char_dive_handoff("formation_char_dive_handoff")
 
         hit_state = self.destroy_formation_member()
         self.assert_true(
@@ -1214,6 +1277,7 @@ class Playtester:
             "formation_shift_phase": initial["formation_shift_phase"],
             "formation_direction_samples": bounce_state["deltas"],
             "formation_char_motion_samples": 0 if char_motion_state is None else len(char_motion_state["transitions"]),
+            "formation_char_dive_samples": 0 if dive_handoff_state is None else len(dive_handoff_state["observations"]),
             "shot_attempts": hit_state["attempt"],
             "destroyed_slots": hit_state["destroyed_slots"],
             "alive_slots_after_hit": self.total_formation_alive_count(gap_state),

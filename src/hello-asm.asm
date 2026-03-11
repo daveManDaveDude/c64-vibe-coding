@@ -3831,6 +3831,12 @@ render_formation_char_slot0_check_alive:
   jsr disable_formation_sprite_slot0
   jmp draw_formation_char_slot0
 render_formation_char_slot0_dive:
+  lda formation_slot0_x_lo
+  sta formation_char_slot_x_lo
+  lda formation_slot0_x_hi
+  sta formation_char_slot_x_hi
+  ldy #FORMATION_CHAR_BAND_TOP_ROW
+  jsr clear_formation_char_slot_screen
   jsr store_dive_position
   rts
 render_formation_char_slot0_disable:
@@ -3854,6 +3860,12 @@ render_formation_char_slot1_check_alive:
   jsr disable_formation_sprite_slot1
   jmp draw_formation_char_slot1
 render_formation_char_slot1_dive:
+  lda formation_slot1_x_lo
+  sta formation_char_slot_x_lo
+  lda formation_slot1_x_hi
+  sta formation_char_slot_x_hi
+  ldy #FORMATION_CHAR_BAND_TOP_ROW
+  jsr clear_formation_char_slot_screen
   jsr store_dive_position
   rts
 render_formation_char_slot1_disable:
@@ -3877,6 +3889,12 @@ render_formation_char_slot2_check_alive:
   jsr disable_formation_sprite_slot2
   jmp draw_formation_char_slot2
 render_formation_char_slot2_dive:
+  lda formation_slot2_x_lo
+  sta formation_char_slot_x_lo
+  lda formation_slot2_x_hi
+  sta formation_char_slot_x_hi
+  ldy #FORMATION_CHAR_BAND_MID_ROW
+  jsr clear_formation_char_slot_screen
   jsr store_dive_position
   rts
 render_formation_char_slot2_disable:
@@ -3900,6 +3918,12 @@ render_formation_char_slot3_check_alive:
   jsr disable_formation_sprite_slot3
   jmp draw_formation_char_slot3
 render_formation_char_slot3_dive:
+  lda formation_slot3_x_lo
+  sta formation_char_slot_x_lo
+  lda formation_slot3_x_hi
+  sta formation_char_slot_x_hi
+  ldy #FORMATION_CHAR_BAND_MID_ROW
+  jsr clear_formation_char_slot_screen
   jsr store_dive_position
   rts
 render_formation_char_slot3_disable:
@@ -3923,6 +3947,12 @@ render_formation_char_slot4_check_alive:
   jsr disable_formation_sprite_slot4
   jmp draw_formation_char_slot4
 render_formation_char_slot4_dive:
+  lda formation_slot4_x_lo
+  sta formation_char_slot_x_lo
+  lda formation_slot4_x_hi
+  sta formation_char_slot_x_hi
+  ldy #FORMATION_CHAR_BAND_BOTTOM_ROW
+  jsr clear_formation_char_slot_screen
   jsr store_dive_position
   rts
 render_formation_char_slot4_disable:
@@ -3946,6 +3976,12 @@ render_formation_char_slot5_check_alive:
   jsr disable_formation_sprite_slot5
   jmp draw_formation_char_slot5
 render_formation_char_slot5_dive:
+  lda formation_slot5_x_lo
+  sta formation_char_slot_x_lo
+  lda formation_slot5_x_hi
+  sta formation_char_slot_x_hi
+  ldy #FORMATION_CHAR_BAND_BOTTOM_ROW
+  jsr clear_formation_char_slot_screen
   jsr store_dive_position
   rts
 render_formation_char_slot5_disable:
@@ -4120,6 +4156,61 @@ draw_formation_char_slot_common:
   adc #$03
   sta (SCREEN_PTR), y
   lda formation_char_color
+  sta (COLOR_PTR), y
+  rts
+
+clear_formation_char_slot_screen:
+  sty formation_char_row
+
+  lda formation_char_slot_x_lo
+  sec
+  sbc #PLAYFIELD_LEFT_X_LO
+  sta formation_char_relative_lo
+  lda formation_char_slot_x_hi
+  sbc #PLAYFIELD_LEFT_X_HI
+  sta formation_char_relative_hi
+
+  lsr formation_char_relative_hi
+  ror formation_char_relative_lo
+  lsr formation_char_relative_hi
+  ror formation_char_relative_lo
+  lsr formation_char_relative_hi
+  ror formation_char_relative_lo
+
+  lda formation_char_relative_lo
+  clc
+  adc #FORMATION_CHAR_BAND_ORIGIN_COL
+  sta formation_char_col
+
+  ldy formation_char_row
+  lda screen_row_lo, y
+  sta SCREEN_PTR
+  lda screen_row_hi, y
+  sta SCREEN_PTR + 1
+  lda color_row_lo, y
+  sta COLOR_PTR
+  lda color_row_hi, y
+  sta COLOR_PTR + 1
+
+  ldy formation_char_col
+  lda #$20
+  sta (SCREEN_PTR), y
+  lda #PLAYFIELD_TEXT_COLOR
+  sta (COLOR_PTR), y
+  iny
+  lda #$20
+  sta (SCREEN_PTR), y
+  lda #PLAYFIELD_TEXT_COLOR
+  sta (COLOR_PTR), y
+  iny
+  lda #$20
+  sta (SCREEN_PTR), y
+  lda #PLAYFIELD_TEXT_COLOR
+  sta (COLOR_PTR), y
+  iny
+  lda #$20
+  sta (SCREEN_PTR), y
+  lda #PLAYFIELD_TEXT_COLOR
   sta (COLOR_PTR), y
   rts
 
@@ -4815,7 +4906,7 @@ enemy_explosion_sprite3:
 player_explosion_sprites:
   .import binary "generated_player_explosion.bin"
 
-* = $4a00 "Explosion Frame Routines"
+* = $4b00 "Explosion Frame Routines"
 
 set_slot_explosion_frame:
   tax
