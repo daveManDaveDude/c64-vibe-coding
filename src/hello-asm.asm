@@ -13,6 +13,8 @@ BasicUpstart2(start)
 .label IRQ_VECTOR_HI = $0315
 .label VIC_CTRL1 = $d011
 .label VIC_CTRL2 = $d016
+.label BACKGROUND_MULTICOLOR_1 = $d022
+.label BACKGROUND_MULTICOLOR_2 = $d023
 .label MEMORY_SETUP = $d018
 .label SPRITE_ENABLE = $d015
 .label SPRITE_X_MSB = $d010
@@ -176,6 +178,7 @@ BasicUpstart2(start)
 .label FORMATION_ANIMATION_SHIFT = 5
 .label FORMATION_CHAR_BASE = 96
 .label FORMATION_CHAR_SLOT_STRIDE = 4
+.label FORMATION_CHAR_MULTICOLOR_FLAG = $08
 .label FORMATION_CHAR_BAND_ORIGIN_COL = 0
 .label FORMATION_CHAR_BAND_WIDTH = 40
 .label FORMATION_CHAR_BAND_HEIGHT = 5
@@ -278,7 +281,7 @@ init_vic:
 
   lda #$1b
   sta VIC_CTRL1
-  lda #$08
+  lda #$18
   sta VIC_CTRL2
   lda #$12
   sta MEMORY_SETUP
@@ -538,8 +541,10 @@ init_formation_renderer:
   sta SPRITE_ENABLE
   lda #FORMATION_MULTI0_COLOR
   sta SPRITE_MULTICOLOR_0
+  sta BACKGROUND_MULTICOLOR_1
   lda #FORMATION_MULTI1_COLOR
   sta SPRITE_MULTICOLOR_1
+  sta BACKGROUND_MULTICOLOR_2
   jsr clear_formation_char_band
   jsr clear_formation_char_glyphs
   lda #$00
@@ -3131,6 +3136,7 @@ draw_formation_char_slot_common_loop:
   adc formation_char_glyph_base
   sta (SCREEN_PTR), y
   lda formation_char_color
+  ora #FORMATION_CHAR_MULTICOLOR_FLAG
   sta (COLOR_PTR), y
   iny
   inx

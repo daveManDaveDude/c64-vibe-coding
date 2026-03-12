@@ -113,7 +113,7 @@ def draw_formation_slot(
     top_row = symbols["FORMATION_CHAR_BAND_TOP_ROW"]
     mid_row = symbols["FORMATION_CHAR_BAND_MID_ROW"]
     row = (top_row, top_row, mid_row, mid_row, symbols["FORMATION_CHAR_BAND_BOTTOM_ROW"], symbols["FORMATION_CHAR_BAND_BOTTOM_ROW"])[slot_index]
-    color = (
+    slot_color = (
         symbols["FLAGSHIP_COLOR"],
         symbols["FLAGSHIP_COLOR"],
         symbols["ESCORT_COLOR"],
@@ -131,7 +131,6 @@ def draw_formation_slot(
     formation_char_value = FORMATION_ANIMATION_SEQUENCES[slot_index][anim_index]
     frame_offset = (formation_char_value << 8) + (shift_phase << 5)
     glyph_bytes = formation_bitmap_data[frame_offset : frame_offset + 32]
-    pixel_color = c64_rgba(color)
 
     for glyph_index in range(4):
         if char_col + glyph_index >= symbols["FORMATION_CHAR_BAND_WIDTH"]:
@@ -141,9 +140,19 @@ def draw_formation_slot(
         pixel_y = SCREEN_ORIGIN_Y + (row * 8)
         for glyph_y in range(8):
             bits = glyph[glyph_y]
-            for glyph_x in range(8):
-                if bits & (0x80 >> glyph_x):
-                    draw_pixel(rows, pixel_x + glyph_x, pixel_y + glyph_y, pixel_color)
+            for pair_index in range(4):
+                code = (bits >> (6 - (pair_index * 2))) & 0b11
+                if code == 0:
+                    continue
+                if code == 1:
+                    pixel_color = c64_rgba(symbols["FORMATION_MULTI0_COLOR"])
+                elif code == 2:
+                    pixel_color = c64_rgba(symbols["FORMATION_MULTI1_COLOR"])
+                else:
+                    pixel_color = c64_rgba(slot_color)
+                pixel_pair_x = pixel_x + (pair_index * 2)
+                draw_pixel(rows, pixel_pair_x, pixel_y + glyph_y, pixel_color)
+                draw_pixel(rows, pixel_pair_x + 1, pixel_y + glyph_y, pixel_color)
 
 
 def render_sample_frame(sample: dict, symbols: dict, formation_bitmap_data: bytes, output_path: Path) -> str:
