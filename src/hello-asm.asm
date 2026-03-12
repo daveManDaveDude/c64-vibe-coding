@@ -556,6 +556,15 @@ init_formation_renderer:
   sta SPRITE_ENABLE
   jsr clear_formation_char_band
   jsr clear_formation_char_glyphs
+  lda #$00
+  sta formation_char_render_mask_pending
+  sta formation_char_render_mask
+  sta formation_char_last_col + 0
+  sta formation_char_last_col + 1
+  sta formation_char_last_col + 2
+  sta formation_char_last_col + 3
+  sta formation_char_last_col + 4
+  sta formation_char_last_col + 5
   rts
 
 init_player:
@@ -3837,7 +3846,16 @@ disable_formation_sprite_slot5:
 render_formation_char:
   lda #$00
   sta formation_char_render_mask_pending
-  jsr clear_formation_char_band
+  ldx #$00
+render_formation_char_clear_previous_loop:
+  lda formation_char_render_mask
+  and formation_char_render_bit_table, x
+  beq render_formation_char_clear_previous_next
+  jsr clear_formation_char_slot_saved
+render_formation_char_clear_previous_next:
+  inx
+  cpx #$06
+  bcc render_formation_char_clear_previous_loop
   ldx #$00
   jsr render_formation_char_slot0_state
   ldx #$01
@@ -4155,6 +4173,7 @@ draw_formation_char_slot_common:
   clc
   adc #FORMATION_CHAR_BAND_ORIGIN_COL
   sta formation_char_col
+  sta formation_char_last_col, x
 
   jsr update_formation_char_slot_glyphs
 
@@ -4233,6 +4252,40 @@ clear_formation_char_slot_screen_loop:
   cpx #$04
   bcc clear_formation_char_slot_screen_loop
 clear_formation_char_slot_screen_done:
+  rts
+
+clear_formation_char_slot_saved:
+  txa
+  pha
+
+  lda formation_char_row_table, x
+  tay
+  lda screen_row_lo, y
+  sta SCREEN_PTR
+  lda screen_row_hi, y
+  sta SCREEN_PTR + 1
+  lda color_row_lo, y
+  sta COLOR_PTR
+  lda color_row_hi, y
+  sta COLOR_PTR + 1
+
+  lda formation_char_last_col, x
+  tay
+  ldx #$00
+clear_formation_char_slot_saved_loop:
+  cpy #(FORMATION_CHAR_BAND_ORIGIN_COL + FORMATION_CHAR_BAND_WIDTH)
+  bcs clear_formation_char_slot_saved_done
+  lda #$20
+  sta (SCREEN_PTR), y
+  lda #PLAYFIELD_TEXT_COLOR
+  sta (COLOR_PTR), y
+  iny
+  inx
+  cpx #$04
+  bcc clear_formation_char_slot_saved_loop
+clear_formation_char_slot_saved_done:
+  pla
+  tax
   rts
 
 update_formation_char_slot_glyphs:
@@ -4549,6 +4602,8 @@ formation_char_relative_hi:
   .byte $00
 formation_char_shift_phase_local:
   .byte $00
+formation_char_last_col:
+  .fill 6, $00
 formation_char_render_mask_pending:
   .byte $00
 formation_char_render_mask:
@@ -4605,6 +4660,8 @@ formation_char_band_rows:
   .byte FORMATION_CHAR_BAND_TOP_ROW,FORMATION_CHAR_BAND_TOP_ROW + 1,FORMATION_CHAR_BAND_MID_ROW,FORMATION_CHAR_BAND_MID_ROW + 1,FORMATION_CHAR_BAND_BOTTOM_ROW
 formation_char_row_table:
   .byte FORMATION_CHAR_BAND_TOP_ROW,FORMATION_CHAR_BAND_TOP_ROW,FORMATION_CHAR_BAND_MID_ROW,FORMATION_CHAR_BAND_MID_ROW,FORMATION_CHAR_BAND_BOTTOM_ROW,FORMATION_CHAR_BAND_BOTTOM_ROW
+formation_char_render_bit_table:
+  .byte %00000001,%00000010,%00000100,%00001000,%00010000,%00100000
 formation_char_color_table:
   .byte FLAGSHIP_COLOR,FLAGSHIP_COLOR,ESCORT_COLOR,ESCORT_COLOR,GRUNT_COLOR,GRUNT_COLOR
 flagship_char_animation_sequence:
