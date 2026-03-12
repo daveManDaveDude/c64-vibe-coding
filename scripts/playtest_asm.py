@@ -549,6 +549,12 @@ class Playtester:
             dive_x = dive_x_lo | (dive_x_hi << 8)
         if dive_active and "dive_y" in self.symbols:
             dive_y = self.monitor.mem_get(self.symbols["dive_y"], 1)[0]
+        dive_launch_counter = None
+        if "dive_launch_counter" in self.symbols:
+            dive_launch_counter = self.monitor.mem_get(self.symbols["dive_launch_counter"], 1)[0]
+        dive_launch_y = None
+        if "dive_launch_y_debug" in self.symbols:
+            dive_launch_y = self.monitor.mem_get(self.symbols["dive_launch_y_debug"], 1)[0]
         shot_active = None
         if "shot_active" in self.symbols:
             shot_active = self.monitor.mem_get(self.symbols["shot_active"], 1)[0] != 0
@@ -663,6 +669,8 @@ class Playtester:
             "dive_slot": dive_slot,
             "dive_x": dive_x,
             "dive_y": dive_y,
+            "dive_launch_counter": dive_launch_counter,
+            "dive_launch_y": dive_launch_y,
             "formation_0_enabled": (sprite_enable & 0x01) != 0,
             "formation_1_enabled": (sprite_enable & 0x08) != 0,
             "formation_2_enabled": (sprite_enable & 0x10) != 0,
@@ -769,6 +777,26 @@ class Playtester:
             "values": values,
             "addresses": addresses,
         }
+
+    def slot_visual_y(self, sample, slot_index: int) -> int:
+        if sample.get("formation_renderer_mode") == FORMATION_RENDERER_CHAR:
+            top_y = self.symbols.get(
+                "FORMATION_CHAR_TOP_Y",
+                self.symbols["FORMATION_TOP_Y"] + self.symbols.get("FORMATION_CHAR_TRIM_TOP_ROWS", 0),
+            )
+            mid_y = self.symbols.get(
+                "FORMATION_CHAR_MID_Y",
+                self.symbols["FORMATION_MID_Y"] + self.symbols.get("FORMATION_CHAR_TRIM_TOP_ROWS", 0),
+            )
+            bottom_y = self.symbols.get(
+                "FORMATION_CHAR_BOTTOM_Y",
+                self.symbols["FORMATION_BOTTOM_Y"] + self.symbols.get("FORMATION_CHAR_TRIM_TOP_ROWS", 0),
+            )
+        else:
+            top_y = self.symbols["FORMATION_TOP_Y"]
+            mid_y = self.symbols["FORMATION_MID_Y"]
+            bottom_y = self.symbols["FORMATION_BOTTOM_Y"]
+        return (top_y, top_y, mid_y, mid_y, bottom_y, bottom_y)[slot_index]
 
     def assert_char_renderer_output(self, name: str, sample):
         if sample.get("formation_char_render_mask") is not None:
@@ -1251,6 +1279,27 @@ class Playtester:
                 return sample
         raise PlaytestFailure(f"{name}_timeout: {attempts}")
 
+    def wait_for_next_dive_launch(
+        self,
+        name: str,
+        previous_counter: int,
+        max_samples: int = 240,
+        sample_interval: float = 0.05,
+    ):
+        attempts = []
+        for index in range(max_samples):
+            self.resume_for(sample_interval)
+            sample = self.capture_sample(f"{name}-{index}", include_joystick=False)
+            attempts.append(sample)
+            if (
+                sample.get("dive_launch_counter") is not None
+                and sample["dive_launch_counter"] != previous_counter
+                and sample.get("dive_active")
+                and sample.get("dive_slot") is not None
+            ):
+                return sample
+        raise PlaytestFailure(f"{name}_timeout: {attempts}")
+
     def capture_dive_renderer_state(self, sample, dive_slot: int):
         cells = self.formation_char_cells(sample, dive_slot)
         dive_sprite_slot = self.symbols.get("DIVE_VIC_SPRITE_SLOT", 0)
@@ -1271,6 +1320,94 @@ class Playtester:
                 "char_blank": char_blank,
             },
         }
+
+    def assert_char_dive_launch_positions(self, name: str):
+        self.logger.log("Checking the slot launch Y tables and sampling the first armed dive pair")
+        initial = self.read_state(include_joystick=False)
+        previous_counter = initial.get("dive_launch_counter")
+        sprite_y_table_symbol = self.symbols.get("formation_slot_sprite_y_table")
+        char_y_table_symbol = self.symbols.get("formation_slot_char_y_table")
+        self.assert_true(
+            f"{name}_launch_symbols_present",
+            previous_counter is not None
+            and "FORMATION_TOP_Y" in self.symbols
+            and "FORMATION_MID_Y" in self.symbols
+            and "FORMATION_BOTTOM_Y" in self.symbols,
+            {"initial": initial, "symbols": self.symbols},
+        )
+        self.assert_true(
+            f"{name}_launch_table_symbols_present",
+            sprite_y_table_symbol is not None and char_y_table_symbol is not None,
+            {"symbols": self.symbols},
+        )
+
+        sprite_y_table = list(self.monitor.mem_get(sprite_y_table_symbol, INITIAL_FORMATION_ALIVE_COUNT))
+        char_y_table = list(self.monitor.mem_get(char_y_table_symbol, INITIAL_FORMATION_ALIVE_COUNT))
+        expected_sprite_y_table = [
+            self.slot_visual_y({"formation_renderer_mode": FORMATION_RENDERER_SPRITE}, slot_index)
+            for slot_index in range(INITIAL_FORMATION_ALIVE_COUNT)
+        ]
+        expected_char_y_table = [
+            self.slot_visual_y({"formation_renderer_mode": FORMATION_RENDERER_CHAR}, slot_index)
+            for slot_index in range(INITIAL_FORMATION_ALIVE_COUNT)
+        ]
+        self.assert_true(
+            f"{name}_sprite_y_table",
+            sprite_y_table == expected_sprite_y_table,
+            {
+                "expected": expected_sprite_y_table,
+                "actual": sprite_y_table,
+            },
+        )
+        self.assert_true(
+            f"{name}_char_y_table",
+            char_y_table == expected_char_y_table,
+            {
+                "expected": expected_char_y_table,
+                "actual": char_y_table,
+            },
+        )
+
+        expected_order = [4, 5]
+        launches = []
+        for expected_slot in expected_order:
+            launch = self.wait_for_next_dive_launch(
+                f"{name}-slot-{expected_slot}",
+                previous_counter,
+            )
+            previous_counter = launch["dive_launch_counter"]
+            expected_y = self.slot_visual_y(launch, expected_slot)
+            detail = {
+                "expected_slot": expected_slot,
+                "expected_y": expected_y,
+                "launch": launch,
+            }
+            self.assert_true(
+                f"{name}_slot_{expected_slot}_order",
+                launch["dive_slot"] == expected_slot,
+                detail,
+            )
+            self.assert_true(
+                f"{name}_slot_{expected_slot}_y",
+                launch.get("dive_launch_y") == expected_y,
+                detail,
+            )
+            launches.append(
+                {
+                    "slot": expected_slot,
+                    "launch_counter": launch["dive_launch_counter"],
+                    "dive_launch_y": launch.get("dive_launch_y"),
+                    "expected_y": expected_y,
+                }
+            )
+
+        detail = {
+            "launches": launches,
+            "sprite_y_table": sprite_y_table,
+            "char_y_table": char_y_table,
+        }
+        self.record_step(name, "passed", detail)
+        return detail
 
     def assert_char_dive_handoff(self, name: str):
         self.logger.log("Watching for a char-mode dive so the sprite handoff can be inspected")
@@ -1692,7 +1829,9 @@ class Playtester:
             bounce_state["positive_seen"] and bounce_state["negative_seen"],
             bounce_state,
         )
+        playing_state = self.symbols.get("GAME_STATE_PLAYING", 1)
         char_motion_state = None
+        dive_launch_state = None
         dive_handoff_state = None
         dive_destroy_state = None
         shot_active_sample = None
@@ -1719,7 +1858,6 @@ class Playtester:
                 self.assert_char_dive_handoff,
                 "formation_char_dive_handoff",
             )
-            playing_state = self.symbols.get("GAME_STATE_PLAYING", 1)
             self.wait_for_sample_matching(
                 "post_handoff_recovered",
                 lambda sample: (
@@ -1781,6 +1919,9 @@ class Playtester:
             "formation_shift_phase": initial["formation_shift_phase"],
             "formation_direction_samples": bounce_state["deltas"],
             "formation_char_motion_samples": 0 if char_motion_state is None else len(char_motion_state["transitions"]),
+            "formation_char_dive_launches": (
+                [] if dive_launch_state is None else dive_launch_state["launches"]
+            ),
             "formation_char_dive_samples": 0 if dive_handoff_state is None else len(dive_handoff_state["observations"]),
             "dive_launch_slot": None if dive_handoff_state is None else dive_handoff_state["dive_launch_slot"],
             "dive_renderer_state": None if dive_handoff_state is None else dive_handoff_state["dive_renderer_state"],

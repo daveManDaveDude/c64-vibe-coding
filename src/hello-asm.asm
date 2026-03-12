@@ -80,6 +80,10 @@ BasicUpstart2(start)
 .label FORMATION_TOP_Y = 68
 .label FORMATION_MID_Y = 92
 .label FORMATION_BOTTOM_Y = 116
+.label FORMATION_CHAR_TRIM_TOP_ROWS = 4
+.label FORMATION_CHAR_TOP_Y = FORMATION_TOP_Y + FORMATION_CHAR_TRIM_TOP_ROWS
+.label FORMATION_CHAR_MID_Y = FORMATION_MID_Y + FORMATION_CHAR_TRIM_TOP_ROWS
+.label FORMATION_CHAR_BOTTOM_Y = FORMATION_BOTTOM_Y + FORMATION_CHAR_TRIM_TOP_ROWS
 .label FORMATION_MIN_X_LO = $18
 .label FORMATION_MIN_X_HI = $00
 .label FORMATION_CHAR_MIN_X_LO = $1c
@@ -677,6 +681,8 @@ init_dive_attack:
   sta dive_x_lo
   sta dive_x_hi
   sta dive_y
+  sta dive_launch_counter
+  sta dive_launch_y_debug
 
   lda #DIVE_SLOT_NONE
   sta dive_slot
@@ -1374,8 +1380,6 @@ launch_slot0:
   sta dive_x_lo
   lda formation_slot0_x_hi
   sta dive_x_hi
-  lda #FORMATION_TOP_Y
-  sta dive_y
   lda #DIVE_DIRECTION_LEFT
   sta dive_direction
   jmp begin_dive
@@ -1392,8 +1396,6 @@ launch_slot1:
   sta dive_x_lo
   lda formation_slot1_x_hi
   sta dive_x_hi
-  lda #FORMATION_TOP_Y
-  sta dive_y
   lda #DIVE_DIRECTION_RIGHT
   sta dive_direction
   jmp begin_dive
@@ -1410,8 +1412,6 @@ launch_slot2:
   sta dive_x_lo
   lda formation_slot2_x_hi
   sta dive_x_hi
-  lda #FORMATION_MID_Y
-  sta dive_y
   lda #DIVE_DIRECTION_LEFT
   sta dive_direction
   jmp begin_dive
@@ -1428,8 +1428,6 @@ launch_slot3:
   sta dive_x_lo
   lda formation_slot3_x_hi
   sta dive_x_hi
-  lda #FORMATION_MID_Y
-  sta dive_y
   lda #DIVE_DIRECTION_RIGHT
   sta dive_direction
   jmp begin_dive
@@ -1446,8 +1444,6 @@ launch_slot4:
   sta dive_x_lo
   lda formation_slot4_x_hi
   sta dive_x_hi
-  lda #FORMATION_BOTTOM_Y
-  sta dive_y
   lda #DIVE_DIRECTION_LEFT
   sta dive_direction
   jmp begin_dive
@@ -1464,13 +1460,16 @@ launch_slot5:
   sta dive_x_lo
   lda formation_slot5_x_hi
   sta dive_x_hi
-  lda #FORMATION_BOTTOM_Y
-  sta dive_y
   lda #DIVE_DIRECTION_RIGHT
   sta dive_direction
   jmp begin_dive
 
 begin_dive:
+  ldx dive_slot
+  jsr load_slot_visual_y
+  sta dive_y
+  sta dive_launch_y_debug
+  inc dive_launch_counter
   lda #$01
   sta dive_active
   lda #$00
@@ -1839,51 +1838,6 @@ select_flagship_dive_animation:
   sta dive_sprite_pointer
   lda flagship_dive_animation_colors, x
   sta dive_sprite_color
-  rts
-
-restore_dive_slot_y:
-  lda dive_slot
-  beq restore_dive_slot0_y
-  cmp #$01
-  beq restore_dive_slot1_y
-  cmp #$02
-  beq restore_dive_slot2_y
-  cmp #$03
-  beq restore_dive_slot3_y
-  cmp #$04
-  beq restore_dive_slot4_y
-  cmp #$05
-  beq restore_dive_slot5_y
-  rts
-
-restore_dive_slot0_y:
-  lda #FORMATION_TOP_Y
-  sta SPRITE0_Y
-  rts
-
-restore_dive_slot1_y:
-  lda #FORMATION_TOP_Y
-  sta SPRITE3_Y
-  rts
-
-restore_dive_slot2_y:
-  lda #FORMATION_MID_Y
-  sta SPRITE4_Y
-  rts
-
-restore_dive_slot3_y:
-  lda #FORMATION_MID_Y
-  sta SPRITE5_Y
-  rts
-
-restore_dive_slot4_y:
-  lda #FORMATION_BOTTOM_Y
-  sta SPRITE6_Y
-  rts
-
-restore_dive_slot5_y:
-  lda #FORMATION_BOTTOM_Y
-  sta SPRITE7_Y
   rts
 
 update_enemy_fire:
@@ -2452,7 +2406,8 @@ check_slot0_alive:
   sta target_x_lo
   lda formation_slot0_x_hi
   sta target_x_hi
-  lda #FORMATION_TOP_Y
+  ldx #$00
+  jsr load_slot_visual_y
   sta target_y
   jsr shot_hits_target
   bcc check_slot1
@@ -2473,7 +2428,8 @@ check_slot1_alive:
   sta target_x_lo
   lda formation_slot1_x_hi
   sta target_x_hi
-  lda #FORMATION_TOP_Y
+  ldx #$01
+  jsr load_slot_visual_y
   sta target_y
   jsr shot_hits_target
   bcc check_slot2
@@ -2494,7 +2450,8 @@ check_slot2_alive:
   sta target_x_lo
   lda formation_slot2_x_hi
   sta target_x_hi
-  lda #FORMATION_MID_Y
+  ldx #$02
+  jsr load_slot_visual_y
   sta target_y
   jsr shot_hits_target
   bcc check_slot3
@@ -2515,7 +2472,8 @@ check_slot3_alive:
   sta target_x_lo
   lda formation_slot3_x_hi
   sta target_x_hi
-  lda #FORMATION_MID_Y
+  ldx #$03
+  jsr load_slot_visual_y
   sta target_y
   jsr shot_hits_target
   bcc check_slot4
@@ -2536,7 +2494,8 @@ check_slot4_alive:
   sta target_x_lo
   lda formation_slot4_x_hi
   sta target_x_hi
-  lda #FORMATION_BOTTOM_Y
+  ldx #$04
+  jsr load_slot_visual_y
   sta target_y
   jsr shot_hits_target
   bcc check_slot5
@@ -2557,7 +2516,8 @@ check_slot5_alive:
   sta target_x_lo
   lda formation_slot5_x_hi
   sta target_x_hi
-  lda #FORMATION_BOTTOM_Y
+  ldx #$05
+  jsr load_slot_visual_y
   sta target_y
   jsr shot_hits_target
   bcc no_shot_hit
@@ -4516,6 +4476,10 @@ dive_x_hi:
   .byte $00
 dive_y:
   .byte $00
+dive_launch_counter:
+  .byte $00
+dive_launch_y_debug:
+  .byte $00
 player_x_lo:
   .byte PLAYER_START_X_LO
 player_x_hi:
@@ -4724,6 +4688,10 @@ formation_char_band_rows:
   .byte FORMATION_CHAR_BAND_TOP_ROW,FORMATION_CHAR_BAND_TOP_ROW + 1,FORMATION_CHAR_BAND_MID_ROW,FORMATION_CHAR_BAND_MID_ROW + 1,FORMATION_CHAR_BAND_BOTTOM_ROW
 formation_char_row_table:
   .byte FORMATION_CHAR_BAND_TOP_ROW,FORMATION_CHAR_BAND_TOP_ROW,FORMATION_CHAR_BAND_MID_ROW,FORMATION_CHAR_BAND_MID_ROW,FORMATION_CHAR_BAND_BOTTOM_ROW,FORMATION_CHAR_BAND_BOTTOM_ROW
+formation_slot_sprite_y_table:
+  .byte FORMATION_TOP_Y,FORMATION_TOP_Y,FORMATION_MID_Y,FORMATION_MID_Y,FORMATION_BOTTOM_Y,FORMATION_BOTTOM_Y
+formation_slot_char_y_table:
+  .byte FORMATION_CHAR_TOP_Y,FORMATION_CHAR_TOP_Y,FORMATION_CHAR_MID_Y,FORMATION_CHAR_MID_Y,FORMATION_CHAR_BOTTOM_Y,FORMATION_CHAR_BOTTOM_Y
 formation_char_render_bit_table:
   .byte %00000001,%00000010,%00000100,%00001000,%00010000,%00100000
 formation_char_color_table:
@@ -4767,7 +4735,62 @@ color_row_hi:
     .byte >(COLOR_RAM + (row * 40))
   }
 
-* = $4f20 "Char Mode Sprite Routines"
+* = $4f40 "Char Mode Sprite Routines"
+
+load_slot_visual_y:
+  lda formation_renderer_mode
+  cmp #FORMATION_RENDERER_MODE_CHAR
+  beq load_slot_visual_y_char
+  lda formation_slot_sprite_y_table, x
+  rts
+load_slot_visual_y_char:
+  lda formation_slot_char_y_table, x
+  rts
+
+restore_dive_slot_y:
+  lda dive_slot
+  beq restore_dive_slot0_y
+  cmp #$01
+  beq restore_dive_slot1_y
+  cmp #$02
+  beq restore_dive_slot2_y
+  cmp #$03
+  beq restore_dive_slot3_y
+  cmp #$04
+  beq restore_dive_slot4_y
+  cmp #$05
+  beq restore_dive_slot5_y
+  rts
+
+restore_dive_slot0_y:
+  lda #FORMATION_TOP_Y
+  sta SPRITE0_Y
+  rts
+
+restore_dive_slot1_y:
+  lda #FORMATION_TOP_Y
+  sta SPRITE3_Y
+  rts
+
+restore_dive_slot2_y:
+  lda #FORMATION_MID_Y
+  sta SPRITE4_Y
+  rts
+
+restore_dive_slot3_y:
+  lda #FORMATION_MID_Y
+  sta SPRITE5_Y
+  rts
+
+restore_dive_slot4_y:
+  lda #FORMATION_BOTTOM_Y
+  sta SPRITE6_Y
+  rts
+
+restore_dive_slot5_y:
+  lda #FORMATION_BOTTOM_Y
+  sta SPRITE7_Y
+  rts
 
 draw_player_extra_layers_char:
   lda player_visible
@@ -5558,7 +5581,7 @@ store_slot0_explosion_position:
   sta explosion_slot_x_lo, x
   lda formation_slot0_x_hi
   sta explosion_slot_x_hi, x
-  lda #FORMATION_TOP_Y
+  jsr load_slot_visual_y
   sta explosion_slot_y, x
   rts
 
@@ -5567,7 +5590,7 @@ store_slot1_explosion_position:
   sta explosion_slot_x_lo, x
   lda formation_slot1_x_hi
   sta explosion_slot_x_hi, x
-  lda #FORMATION_TOP_Y
+  jsr load_slot_visual_y
   sta explosion_slot_y, x
   rts
 
@@ -5576,7 +5599,7 @@ store_slot2_explosion_position:
   sta explosion_slot_x_lo, x
   lda formation_slot2_x_hi
   sta explosion_slot_x_hi, x
-  lda #FORMATION_MID_Y
+  jsr load_slot_visual_y
   sta explosion_slot_y, x
   rts
 
@@ -5585,7 +5608,7 @@ store_slot3_explosion_position:
   sta explosion_slot_x_lo, x
   lda formation_slot3_x_hi
   sta explosion_slot_x_hi, x
-  lda #FORMATION_MID_Y
+  jsr load_slot_visual_y
   sta explosion_slot_y, x
   rts
 
@@ -5594,7 +5617,7 @@ store_slot4_explosion_position:
   sta explosion_slot_x_lo, x
   lda formation_slot4_x_hi
   sta explosion_slot_x_hi, x
-  lda #FORMATION_BOTTOM_Y
+  jsr load_slot_visual_y
   sta explosion_slot_y, x
   rts
 
@@ -5603,6 +5626,6 @@ store_slot5_explosion_position:
   sta explosion_slot_x_lo, x
   lda formation_slot5_x_hi
   sta explosion_slot_x_hi, x
-  lda #FORMATION_BOTTOM_Y
+  jsr load_slot_visual_y
   sta explosion_slot_y, x
   rts
