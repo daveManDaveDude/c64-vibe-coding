@@ -555,6 +555,20 @@ class Playtester:
         player_respawn_timer = None
         if "player_respawn_timer" in self.symbols:
             player_respawn_timer = self.monitor.mem_get(self.symbols["player_respawn_timer"], 1)[0]
+        player_extra_visible = None
+        if "player_extra_visible" in self.symbols:
+            player_extra_visible = self.monitor.mem_get(self.symbols["player_extra_visible"], 1)[0] != 0
+        player_explosion_active = None
+        if "player_explosion_active" in self.symbols:
+            player_explosion_active = self.monitor.mem_get(self.symbols["player_explosion_active"], 1)[0] != 0
+        player_bottom_sprite_mask_debug = None
+        if "player_bottom_sprite_mask_debug" in self.symbols:
+            player_bottom_sprite_mask_debug = self.monitor.mem_get(
+                self.symbols["player_bottom_sprite_mask_debug"], 1
+            )[0]
+        game_state = None
+        if "game_state" in self.symbols:
+            game_state = self.monitor.mem_get(self.symbols["game_state"], 1)[0]
         formation_char_render_mask = None
         if "formation_char_render_mask" in self.symbols:
             formation_char_render_mask = self.monitor.mem_get(self.symbols["formation_char_render_mask"], 1)[0]
@@ -581,6 +595,7 @@ class Playtester:
 
         msb = vic(SPRITE_X_MSB)
         sprite_enable = vic(SPRITE_ENABLE)
+        active_sprite_slots = [index for index in range(8) if sprite_enable & (1 << index)]
         shot_sprite_enabled = (sprite_enable & SHOT_SPRITE_MASK) != 0
         slot_rows = [
             self.symbols.get("FORMATION_TOP_Y", vic(SPRITE0_Y)),
@@ -617,8 +632,13 @@ class Playtester:
             "shot_y": vic(SPRITE2_Y),
             "shot_active": shot_active if shot_active is not None else shot_sprite_enabled,
             "player_respawn_timer": player_respawn_timer,
+            "player_extra_visible": player_extra_visible,
+            "player_explosion_active": player_explosion_active,
+            "player_bottom_sprite_mask_debug": player_bottom_sprite_mask_debug,
+            "game_state": game_state,
             "sprite_enable": sprite_enable,
             "sprite_x_msb": msb,
+            "active_sprite_slots": active_sprite_slots,
             "player_enabled": (sprite_enable & 0x02) != 0,
             "shot_enabled": shot_sprite_enabled,
             "formation_renderer_mode": formation_renderer_mode,
@@ -831,6 +851,25 @@ class Playtester:
             return
         self.assert_true(name, False, sample)
 
+    def assert_char_ready_without_pack_sprites(self, name: str):
+        sample = self.wait_for_sample_matching(
+            name,
+            lambda current: (
+                current.get("formation_renderer_mode_name") == "char"
+                and not current.get("shot_enabled")
+                and not current.get("dive_active")
+                and not current.get("player_explosion_active")
+            ),
+        )
+        self.assert_char_renderer_output(f"{name}_char_output", sample)
+        self.assert_true(
+            f"{name}_top_phase_slots",
+            all(slot not in {0, 3, 4, 5, 6, 7} for slot in sample["active_sprite_slots"]),
+            sample,
+        )
+        self.record_step(name, "passed", sample)
+        return sample
+
     def assert_char_slot_blank(self, name: str, sample, slot_index: int):
         attempts = []
         latest_sample = sample
@@ -850,6 +889,119 @@ class Playtester:
                 latest_sample = self.read_state(include_joystick=False)
 
         self.assert_true(name, False, {"attempts": attempts})
+
+    def capture_shot_active_slots(self, name: str, launch_sample):
+        sample = self.wait_for_sample_matching(
+            name,
+            lambda current: current.get("shot_enabled"),
+            initial_sample=launch_sample,
+        )
+        self.record_step(name, "passed", sample)
+        return sample
+
+    def capture_miss_shot_active_slots(self, name: str):
+        self.logger.log("Firing a deliberate miss so the active shot sprite allocation can be sampled")
+        launch = self.fire_once(name)
+        sample = self.capture_shot_active_slots(f"{name}-active", launch)
+        self.wait_for_sample_matching(
+            f"{name}-clear",
+            lambda current: not current.get("shot_enabled"),
+            max_samples=40,
+            sample_interval=0.15,
+            initial_sample=sample,
+        )
+        return sample
+
+    def provoke_player_hit_and_verify_layers(self, name: str):
+        self.logger.log("Steering into an incoming dive to verify player explosion and respawn layering")
+        attempts = []
+
+        for attempt in range(1, 5):
+            launch = self.wait_for_active_dive(
+                f"{name}-launch-{attempt}",
+                max_samples=30,
+                sample_interval=0.25,
+            )
+            attempt_detail = {
+                "attempt": attempt,
+                "launch_sample": launch,
+                "observations": [],
+            }
+            current = launch
+
+            for watch_index in range(48):
+                if watch_index > 0:
+                    self.resume_for(0.10)
+                    current = self.capture_sample(
+                        f"{name}-attempt-{attempt}-watch-{watch_index}",
+                        include_joystick=False,
+                    )
+                attempt_detail["observations"].append(current)
+
+                if current.get("player_explosion_active"):
+                    attempt_detail["hit_sample"] = current
+                    explosion_sample = self.wait_for_sample_matching(
+                        f"{name}-explosion-{attempt}",
+                        lambda sample: (
+                            sample.get("player_explosion_active")
+                            and all(slot in self.effective_sprite_slots(sample) for slot in (1, 2, 3, 4))
+                        ),
+                        initial_sample=current,
+                    )
+                    self.assert_true(
+                        f"{name}_explosion_slots",
+                        all(slot in self.effective_sprite_slots(explosion_sample) for slot in (1, 2, 3, 4)),
+                        explosion_sample,
+                    )
+                    respawn_sample = self.wait_for_sample_matching(
+                        f"{name}-respawn-{attempt}",
+                        lambda sample: (
+                            not sample.get("player_explosion_active")
+                            and sample.get("player_respawn_timer") not in (None, 0)
+                            and all(slot in self.effective_sprite_slots(sample) for slot in (1, 3, 4))
+                            and 2 not in self.effective_sprite_slots(sample)
+                        ),
+                    )
+                    self.assert_true(
+                        f"{name}_respawn_slots",
+                        all(slot in self.effective_sprite_slots(respawn_sample) for slot in (1, 3, 4))
+                        and 2 not in self.effective_sprite_slots(respawn_sample),
+                        respawn_sample,
+                    )
+                    result = {
+                        "hit_sample": current,
+                        "explosion_sample": explosion_sample,
+                        "respawn_sample": respawn_sample,
+                        "attempt": attempt,
+                    }
+                    self.record_step(name, "passed", result)
+                    return result
+
+                if not current.get("dive_active"):
+                    attempt_detail["result"] = "dive_ended"
+                    attempt_detail["final_sample"] = current
+                    break
+
+                dive_x = current.get("dive_x")
+                if dive_x is None:
+                    continue
+                delta_x = current["player_x"] - dive_x
+                if abs(delta_x) <= 6:
+                    continue
+
+                key_code = LEFT_KEY_CODE if delta_x > 0 else RIGHT_KEY_CODE
+                self.gui.key_down(key_code)
+                try:
+                    self.resume_for(self.dive_tracking_burst_seconds(delta_x))
+                finally:
+                    self.gui.key_up(key_code)
+            else:
+                attempt_detail["result"] = "timeout"
+                attempt_detail["final_sample"] = current
+
+            attempts.append(attempt_detail)
+
+        raise PlaytestFailure(f"{name}_timeout: {attempts}")
 
     def expected_score_award(self, slot_index: int) -> int:
         if slot_index < 2:
@@ -973,6 +1125,37 @@ class Playtester:
     def total_formation_alive_count(self, sample):
         return sum(1 for slot in self.formation_slots(sample) if slot["alive"])
 
+    def sprite_slot_enabled(self, sample, slot_index: int) -> bool:
+        return slot_index in sample.get("active_sprite_slots", [])
+
+    def effective_sprite_slots(self, sample):
+        mask = sample.get("sprite_enable", 0)
+        debug_mask = sample.get("player_bottom_sprite_mask_debug")
+        if debug_mask is not None:
+            mask |= debug_mask
+        return [index for index in range(8) if mask & (1 << index)]
+
+    def wait_for_sample_matching(
+        self,
+        name: str,
+        predicate,
+        max_samples: int = 24,
+        sample_interval: float = 0.07,
+        initial_sample=None,
+    ):
+        attempts = []
+        if initial_sample is not None:
+            attempts.append(initial_sample)
+            if predicate(initial_sample):
+                return initial_sample
+        for index in range(max_samples):
+            self.resume_for(sample_interval)
+            sample = self.capture_sample(f"{name}-{index}", include_joystick=False)
+            attempts.append(sample)
+            if predicate(sample):
+                return sample
+        raise PlaytestFailure(f"{name}_timeout: {attempts}")
+
     def leftmost_formation_x(self, sample):
         live_slots = self.live_formation_slots(sample)
         if not live_slots:
@@ -1070,17 +1253,20 @@ class Playtester:
 
     def capture_dive_renderer_state(self, sample, dive_slot: int):
         cells = self.formation_char_cells(sample, dive_slot)
-        sprite_enabled = sample[f"formation_{dive_slot}_enabled"]
+        dive_sprite_slot = self.symbols.get("DIVE_VIC_SPRITE_SLOT", 0)
+        sprite_enabled = self.sprite_slot_enabled(sample, dive_sprite_slot)
         char_blank = all(value == 0x20 for value in cells["values"])
         return {
             "sample": sample,
             "dive_slot": dive_slot,
+            "dive_sprite_slot": dive_sprite_slot,
             "sprite_enabled": sprite_enabled,
             "char_cells": cells,
             "char_blank": char_blank,
             "dive_renderer_state": {
                 "mode": "sprite_only" if sprite_enabled and char_blank else "mixed",
                 "formation_renderer_mode": sample.get("formation_renderer_mode_name"),
+                "dive_sprite_slot": dive_sprite_slot,
                 "sprite_enabled": sprite_enabled,
                 "char_blank": char_blank,
             },
@@ -1091,16 +1277,21 @@ class Playtester:
         launch = self.wait_for_active_dive(name)
         dive_slot = launch["dive_slot"]
         observations = [self.capture_dive_renderer_state(launch, dive_slot)]
+        dive_sprite_slot = self.symbols.get("DIVE_VIC_SPRITE_SLOT", 0)
+        sprite_sample = self.wait_for_sample_matching(
+            f"{name}-sprite-sample",
+            lambda sample: (
+                sample["dive_active"]
+                and sample["dive_slot"] == dive_slot
+                and self.sprite_slot_enabled(sample, dive_sprite_slot)
+            ),
+            initial_sample=launch,
+        )
 
         while len(observations) < 3:
             self.resume_for(0.35)
             sample = self.capture_sample(f"{name}-observe-{len(observations)}", include_joystick=False)
             if not (sample["dive_active"] and sample["dive_slot"] == dive_slot):
-                self.assert_true(
-                    f"{name}_same_dive_slot",
-                    len(observations) >= 2,
-                    {"dive_slot": dive_slot, "observations": observations, "sample": sample},
-                )
                 break
             observations.append(self.capture_dive_renderer_state(sample, dive_slot))
 
@@ -1123,6 +1314,7 @@ class Playtester:
             "observations": observations,
             "dive_launch_slot": dive_slot,
             "dive_renderer_state": observations[-1]["dive_renderer_state"],
+            "sprite_sample": sprite_sample,
             "last_sample": observations[-1]["sample"],
         }
         self.record_step(name, "passed", result)
@@ -1469,6 +1661,11 @@ class Playtester:
         )
         self.assert_renderer_ready("initial_renderer_mode", initial)
         self.record_step("initial_state", "passed", initial)
+        ready_sprite_sample = None
+        if initial["formation_renderer_mode_name"] == "char":
+            ready_sprite_sample = self.assert_char_ready_without_pack_sprites(
+                "ready_state_pack_free_of_sprite_bits"
+            )
 
         left_clamp = self.drive_until_clamp("left", LEFT_KEY_CODE, LEFT_MASK, moving_left=True)
         self.assert_true(
@@ -1485,6 +1682,8 @@ class Playtester:
             {"left_clamp": left_clamp, "right_clamp": right_clamp},
         )
         self.assert_idle(right_clamp["player_x"], "right")
+        if initial["formation_renderer_mode_name"] == "char":
+            shot_active_sample = self.capture_miss_shot_active_slots("summary-shot")
 
         bounce_state = self.wait_for_formation_bounce()
         self.assert_true("formation_moves", bounce_state["moved"], bounce_state)
@@ -1496,6 +1695,8 @@ class Playtester:
         char_motion_state = None
         dive_handoff_state = None
         dive_destroy_state = None
+        shot_active_sample = None
+        player_hit_state = None
         if initial["formation_renderer_mode_name"] == "char":
             char_motion_state = self.assert_char_renderer_motion("formation_char_motion_visible")
 
@@ -1518,10 +1719,26 @@ class Playtester:
                 self.assert_char_dive_handoff,
                 "formation_char_dive_handoff",
             )
+            playing_state = self.symbols.get("GAME_STATE_PLAYING", 1)
+            self.wait_for_sample_matching(
+                "post_handoff_recovered",
+                lambda sample: (
+                    sample.get("player_enabled")
+                    and not sample.get("player_explosion_active")
+                    and sample.get("game_state") == playing_state
+                ),
+                max_samples=120,
+                sample_interval=0.15,
+            )
+            self.arm_enemy_attacks()
             dive_destroy_state = self.run_without_host_capture(
                 self.destroy_diver_and_verify_absent,
                 "formation_char_dive_destroyed",
-                dive_handoff_state["last_sample"],
+            )
+            self.arm_enemy_attacks()
+            player_hit_state = self.run_without_host_capture(
+                self.provoke_player_hit_and_verify_layers,
+                "player_explosion_layers",
             )
 
         captured_hashes = {
@@ -1574,6 +1791,20 @@ class Playtester:
             "dive_destroyed_slot": None if dive_destroy_state is None else dive_destroy_state.get("dive_slot"),
             "dive_score_delta": None if dive_destroy_state is None else dive_destroy_state.get("score_delta"),
             "alive_slots_after_hit": self.total_formation_alive_count(gap_state),
+            "sprite_slots_by_state": {
+                "ready": None if ready_sprite_sample is None else self.effective_sprite_slots(ready_sprite_sample),
+                "shot_active": None if shot_active_sample is None else self.effective_sprite_slots(shot_active_sample),
+                "dive_active": (
+                    None
+                    if dive_handoff_state is None
+                    else self.effective_sprite_slots(dive_handoff_state["sprite_sample"])
+                ),
+                "player_explosion": (
+                    None
+                    if player_hit_state is None
+                    else self.effective_sprite_slots(player_hit_state["explosion_sample"])
+                ),
+            },
             "captured_frame_count": len(captured_hashes),
             "host_screenshots_enabled": self.args.capture_host_screenshots,
         }

@@ -110,8 +110,23 @@ BasicUpstart2(start)
 .label FORMATION_SLOT3_MASK = %00100000
 .label FORMATION_SLOT4_MASK = %01000000
 .label FORMATION_SLOT5_MASK = %10000000
+.label SPRITE0_MASK = %00000001
+.label SPRITE1_MASK = %00000010
+.label SPRITE2_MASK = %00000100
+.label SPRITE3_MASK = %00001000
+.label SPRITE4_MASK = %00010000
+.label SPRITE5_MASK = %00100000
+.label SPRITE6_MASK = %01000000
+.label SPRITE7_MASK = %10000000
 .label FORMATION_SPRITE_MASK = %11111001
 .label FORMATION_MSB_CLEAR_MASK = %00000110
+.label CHAR_MODE_DYNAMIC_SPRITE_MASK = SPRITE0_MASK | SPRITE3_MASK | SPRITE4_MASK | SPRITE5_MASK | SPRITE6_MASK | SPRITE7_MASK
+.label CHAR_MODE_STATIC_SPRITE_MASK = SPRITE1_MASK | SPRITE2_MASK
+.label CHAR_MODE_EFFECT_SLOT_COUNT = 5
+.label DIVE_VIC_SPRITE_SLOT = 0
+.label DIVE_SPRITE_MASK = SPRITE0_MASK
+.label PLAYER_BOTTOM_LEFT_SPRITE_MASK = SPRITE3_MASK
+.label PLAYER_BOTTOM_RIGHT_SPRITE_MASK = SPRITE4_MASK
 .label PLAYER_COLOR = $02
 .label PLAYER_WHITE_COLOR = $0f
 .label PLAYER_CYAN_COLOR = $03
@@ -714,6 +729,7 @@ init_enemy_fire_loop:
   sta player_effect_color
   sta frame_capture_ready
   sta frame_capture_counter
+  sta player_bottom_sprite_mask_debug
   lda #$00
   sta player_white_slot
   lda #$01
@@ -773,10 +789,15 @@ raster_irq_top_phase:
   sta SPRITE_MULTICOLOR_1
   lda #$00
   sta player_extra_visible
+  sta player_bottom_sprite_mask_debug
   lda formation_renderer_mode
   cmp #FORMATION_RENDERER_MODE_SPRITE
-  bne raster_irq_done
+  bne raster_irq_top_phase_char
   jsr render_formation
+  jmp raster_irq_done
+
+raster_irq_top_phase_char:
+  jsr render_char_mode_top_sprites
 
 raster_irq_done:
   jmp $ea81
@@ -817,6 +838,7 @@ clear_active_dive_state:
 
   lda #DIVE_START_DELAY
   sta dive_delay
+  jsr disable_char_mode_dive_sprite
   rts
 
 cancel_active_dive:
@@ -1610,6 +1632,11 @@ dive_move_right_done:
 
 store_dive_position:
   jsr select_dive_animation_frame
+  lda formation_renderer_mode
+  cmp #FORMATION_RENDERER_MODE_CHAR
+  bne store_dive_position_sprite_map
+  jmp store_dive_position_char
+store_dive_position_sprite_map:
   lda dive_slot
   beq store_dive_position_slot0
   cmp #$01
@@ -2725,6 +2752,9 @@ finish_slot_explosion:
   lda #$00
   sta slot_explosion_timer, x
   sta slot_explosion_frame, x
+  lda formation_renderer_mode
+  cmp #FORMATION_RENDERER_MODE_CHAR
+  beq finish_slot_explosion_done
   txa
   beq finish_slot0_explosion
   cmp #$01
@@ -2771,6 +2801,7 @@ finish_slot5_explosion:
   lda SPRITE_ENABLE
   and #%01111111
   sta SPRITE_ENABLE
+finish_slot_explosion_done:
   rts
 
 destroy_slot0:
@@ -3097,6 +3128,11 @@ draw_player_bottom_effects_player:
   jmp draw_player_extra_layers
 
 draw_player_extra_layers:
+  lda formation_renderer_mode
+  cmp #FORMATION_RENDERER_MODE_CHAR
+  bne draw_player_extra_layers_sprite
+  jmp draw_player_extra_layers_char
+draw_player_extra_layers_sprite:
   lda player_visible
   beq draw_player_extra_layers_done
 
@@ -3120,6 +3156,11 @@ draw_player_extra_layers_done:
   rts
 
 draw_player_explosion:
+  lda formation_renderer_mode
+  cmp #FORMATION_RENDERER_MODE_CHAR
+  bne draw_player_explosion_sprite
+  jmp draw_player_explosion_char
+draw_player_explosion_sprite:
   jsr select_player_extra_slots
 
   lda #PLAYER_EXPLOSION_MULTI0_COLOR
@@ -3880,13 +3921,16 @@ render_formation_char_slot0_state:
 render_formation_char_slot0_check_explosion:
   lda slot_explosion_timer
   beq render_formation_char_slot0_check_alive
-  lda #$00
-  jsr set_slot_explosion_frame
+  lda formation_slot0_x_lo
+  sta formation_char_slot_x_lo
+  lda formation_slot0_x_hi
+  sta formation_char_slot_x_hi
+  ldy #FORMATION_CHAR_BAND_TOP_ROW
+  jsr clear_formation_char_slot_screen
   rts
 render_formation_char_slot0_check_alive:
   lda formation_slot0_alive
   beq render_formation_char_slot0_disable
-  jsr disable_formation_sprite_slot0
   jmp draw_formation_char_slot0
 render_formation_char_slot0_dive:
   lda formation_slot0_x_lo
@@ -3895,10 +3939,9 @@ render_formation_char_slot0_dive:
   sta formation_char_slot_x_hi
   ldy #FORMATION_CHAR_BAND_TOP_ROW
   jsr clear_formation_char_slot_screen
-  jsr store_dive_position
   rts
 render_formation_char_slot0_disable:
-  jmp disable_formation_sprite_slot0
+  rts
 
 render_formation_char_slot1_state:
   lda dive_active
@@ -3909,9 +3952,13 @@ render_formation_char_slot1_state:
 render_formation_char_slot1_check_explosion:
   lda slot_explosion_timer + 1
   beq render_formation_char_slot1_check_alive
-  lda #$01
-  jsr set_slot_explosion_frame
-  rts
+  lda formation_slot1_x_lo
+  sta formation_char_slot_x_lo
+  lda formation_slot1_x_hi
+  sta formation_char_slot_x_hi
+  ldy #FORMATION_CHAR_BAND_TOP_ROW
+  jsr clear_formation_char_slot_screen
+  jmp disable_formation_sprite_slot1
 render_formation_char_slot1_check_alive:
   lda formation_slot1_alive
   beq render_formation_char_slot1_disable
@@ -3924,8 +3971,7 @@ render_formation_char_slot1_dive:
   sta formation_char_slot_x_hi
   ldy #FORMATION_CHAR_BAND_TOP_ROW
   jsr clear_formation_char_slot_screen
-  jsr store_dive_position
-  rts
+  jmp disable_formation_sprite_slot1
 render_formation_char_slot1_disable:
   jmp disable_formation_sprite_slot1
 
@@ -3938,9 +3984,13 @@ render_formation_char_slot2_state:
 render_formation_char_slot2_check_explosion:
   lda slot_explosion_timer + 2
   beq render_formation_char_slot2_check_alive
-  lda #$02
-  jsr set_slot_explosion_frame
-  rts
+  lda formation_slot2_x_lo
+  sta formation_char_slot_x_lo
+  lda formation_slot2_x_hi
+  sta formation_char_slot_x_hi
+  ldy #FORMATION_CHAR_BAND_MID_ROW
+  jsr clear_formation_char_slot_screen
+  jmp disable_formation_sprite_slot2
 render_formation_char_slot2_check_alive:
   lda formation_slot2_alive
   beq render_formation_char_slot2_disable
@@ -3953,8 +4003,7 @@ render_formation_char_slot2_dive:
   sta formation_char_slot_x_hi
   ldy #FORMATION_CHAR_BAND_MID_ROW
   jsr clear_formation_char_slot_screen
-  jsr store_dive_position
-  rts
+  jmp disable_formation_sprite_slot2
 render_formation_char_slot2_disable:
   jmp disable_formation_sprite_slot2
 
@@ -3967,9 +4016,13 @@ render_formation_char_slot3_state:
 render_formation_char_slot3_check_explosion:
   lda slot_explosion_timer + 3
   beq render_formation_char_slot3_check_alive
-  lda #$03
-  jsr set_slot_explosion_frame
-  rts
+  lda formation_slot3_x_lo
+  sta formation_char_slot_x_lo
+  lda formation_slot3_x_hi
+  sta formation_char_slot_x_hi
+  ldy #FORMATION_CHAR_BAND_MID_ROW
+  jsr clear_formation_char_slot_screen
+  jmp disable_formation_sprite_slot3
 render_formation_char_slot3_check_alive:
   lda formation_slot3_alive
   beq render_formation_char_slot3_disable
@@ -3982,8 +4035,7 @@ render_formation_char_slot3_dive:
   sta formation_char_slot_x_hi
   ldy #FORMATION_CHAR_BAND_MID_ROW
   jsr clear_formation_char_slot_screen
-  jsr store_dive_position
-  rts
+  jmp disable_formation_sprite_slot3
 render_formation_char_slot3_disable:
   jmp disable_formation_sprite_slot3
 
@@ -3996,9 +4048,13 @@ render_formation_char_slot4_state:
 render_formation_char_slot4_check_explosion:
   lda slot_explosion_timer + 4
   beq render_formation_char_slot4_check_alive
-  lda #$04
-  jsr set_slot_explosion_frame
-  rts
+  lda formation_slot4_x_lo
+  sta formation_char_slot_x_lo
+  lda formation_slot4_x_hi
+  sta formation_char_slot_x_hi
+  ldy #FORMATION_CHAR_BAND_BOTTOM_ROW
+  jsr clear_formation_char_slot_screen
+  jmp disable_formation_sprite_slot4
 render_formation_char_slot4_check_alive:
   lda formation_slot4_alive
   beq render_formation_char_slot4_disable
@@ -4011,8 +4067,7 @@ render_formation_char_slot4_dive:
   sta formation_char_slot_x_hi
   ldy #FORMATION_CHAR_BAND_BOTTOM_ROW
   jsr clear_formation_char_slot_screen
-  jsr store_dive_position
-  rts
+  jmp disable_formation_sprite_slot4
 render_formation_char_slot4_disable:
   jmp disable_formation_sprite_slot4
 
@@ -4025,9 +4080,13 @@ render_formation_char_slot5_state:
 render_formation_char_slot5_check_explosion:
   lda slot_explosion_timer + 5
   beq render_formation_char_slot5_check_alive
-  lda #$05
-  jsr set_slot_explosion_frame
-  rts
+  lda formation_slot5_x_lo
+  sta formation_char_slot_x_lo
+  lda formation_slot5_x_hi
+  sta formation_char_slot_x_hi
+  ldy #FORMATION_CHAR_BAND_BOTTOM_ROW
+  jsr clear_formation_char_slot_screen
+  jmp disable_formation_sprite_slot5
 render_formation_char_slot5_check_alive:
   lda formation_slot5_alive
   beq render_formation_char_slot5_disable
@@ -4040,8 +4099,7 @@ render_formation_char_slot5_dive:
   sta formation_char_slot_x_hi
   ldy #FORMATION_CHAR_BAND_BOTTOM_ROW
   jsr clear_formation_char_slot_screen
-  jsr store_dive_position
-  rts
+  jmp disable_formation_sprite_slot5
 render_formation_char_slot5_disable:
   jmp disable_formation_sprite_slot5
 
@@ -4488,6 +4546,8 @@ raster_phase:
   .byte RASTER_PHASE_TOP
 player_extra_visible:
   .byte $00
+player_bottom_sprite_mask_debug:
+  .byte $00
 formation_anim_index:
   .byte $00
 formation_renderer_mode:
@@ -4610,6 +4670,10 @@ formation_char_render_mask:
   .byte $00
 enemy_explosion_pointer:
   .byte $00
+char_mode_effect_source_slot:
+  .byte $00
+char_mode_effect_target_slot:
+  .byte $00
 cpu_port_backup:
   .byte $00
 score_total_lo:
@@ -4702,6 +4766,392 @@ color_row_hi:
   .for (var row = 0; row < 25; row++) {
     .byte >(COLOR_RAM + (row * 40))
   }
+
+* = $4f20 "Char Mode Sprite Routines"
+
+draw_player_extra_layers_char:
+  lda player_visible
+  bne draw_player_extra_layers_char_visible
+  rts
+draw_player_extra_layers_char_visible:
+  jsr store_char_mode_player_bottom_left
+  jsr store_char_mode_player_bottom_right
+  rts
+
+draw_player_explosion_char:
+  lda #PLAYER_EXPLOSION_MULTI0_COLOR
+  sta SPRITE_MULTICOLOR_0
+  lda #PLAYER_EXPLOSION_MULTI1_COLOR
+  sta SPRITE_MULTICOLOR_1
+
+  ldy player_explosion_frame
+  lda player_explosion_top_left_sequence, y
+  sta player_explosion_top_left_pointer
+  lda player_explosion_top_right_sequence, y
+  sta player_explosion_top_right_pointer
+  lda player_explosion_bottom_left_sequence, y
+  sta player_explosion_bottom_left_pointer
+  lda player_explosion_bottom_right_sequence, y
+  sta player_explosion_bottom_right_pointer
+
+  jsr store_player_explosion_sprite1
+  jsr store_player_explosion_sprite2
+
+  lda player_explosion_x_lo
+  sta player_effect_x_lo
+  lda player_explosion_x_hi
+  sta player_effect_x_hi
+  lda player_explosion_y
+  clc
+  adc #PLAYER_EXPLOSION_TILE_OFFSET
+  sta player_effect_y
+  lda player_explosion_bottom_left_pointer
+  sta player_effect_pointer
+  lda #PLAYER_EXPLOSION_COLOR
+  sta player_effect_color
+  jsr store_char_mode_player_explosion_bottom_left
+
+  lda player_explosion_x_lo
+  clc
+  adc #PLAYER_EXPLOSION_TILE_OFFSET
+  sta player_effect_x_lo
+  lda player_explosion_x_hi
+  adc #$00
+  sta player_effect_x_hi
+  lda player_explosion_y
+  clc
+  adc #PLAYER_EXPLOSION_TILE_OFFSET
+  sta player_effect_y
+  lda player_explosion_bottom_right_pointer
+  sta player_effect_pointer
+  lda #PLAYER_EXPLOSION_COLOR
+  sta player_effect_color
+  jmp store_char_mode_player_explosion_bottom_right
+
+store_dive_position_char:
+  lda dive_x_lo
+  sta SPRITE0_X
+  lda dive_y
+  sta SPRITE0_Y
+  lda SPRITE_X_MSB
+  and #%11111110
+  ldx dive_x_hi
+  beq store_dive_position_char_done
+  ora #DIVE_SPRITE_MASK
+store_dive_position_char_done:
+  sta SPRITE_X_MSB
+  lda dive_sprite_pointer
+  sta SPRITE_POINTERS
+  lda dive_sprite_color
+  sta SPRITE0_COLOR
+  lda SPRITE_MULTICOLOR
+  ora #DIVE_SPRITE_MASK
+  sta SPRITE_MULTICOLOR
+  lda SPRITE_ENABLE
+  ora #DIVE_SPRITE_MASK
+  sta SPRITE_ENABLE
+  rts
+
+store_char_mode_player_bottom_left:
+  lda player_x_lo
+  sta SPRITE3_X
+  lda #PLAYER_Y
+  sta SPRITE3_Y
+  lda SPRITE_X_MSB
+  and #%11110111
+  ldx player_x_hi
+  beq store_char_mode_player_bottom_left_msb_done
+  ora #PLAYER_BOTTOM_LEFT_SPRITE_MASK
+store_char_mode_player_bottom_left_msb_done:
+  sta SPRITE_X_MSB
+  lda #PLAYER_WHITE_SPRITE_PTR
+  sta SPRITE_POINTERS + 3
+  lda #PLAYER_WHITE_COLOR
+  sta SPRITE3_COLOR
+  lda SPRITE_MULTICOLOR
+  and #%11110111
+  sta SPRITE_MULTICOLOR
+  lda SPRITE_ENABLE
+  ora #PLAYER_BOTTOM_LEFT_SPRITE_MASK
+  sta SPRITE_ENABLE
+  rts
+
+store_char_mode_player_bottom_right:
+  lda player_x_lo
+  sta SPRITE4_X
+  lda #PLAYER_Y
+  sta SPRITE4_Y
+  lda SPRITE_X_MSB
+  and #%11101111
+  ldx player_x_hi
+  beq store_char_mode_player_bottom_right_msb_done
+  ora #PLAYER_BOTTOM_RIGHT_SPRITE_MASK
+store_char_mode_player_bottom_right_msb_done:
+  sta SPRITE_X_MSB
+  lda #PLAYER_CYAN_SPRITE_PTR
+  sta SPRITE_POINTERS + 4
+  lda #PLAYER_CYAN_COLOR
+  sta SPRITE4_COLOR
+  lda SPRITE_MULTICOLOR
+  and #%11101111
+  sta SPRITE_MULTICOLOR
+  lda SPRITE_ENABLE
+  ora #PLAYER_BOTTOM_RIGHT_SPRITE_MASK
+  sta SPRITE_ENABLE
+  lda #(PLAYER_BOTTOM_LEFT_SPRITE_MASK | PLAYER_BOTTOM_RIGHT_SPRITE_MASK)
+  sta player_bottom_sprite_mask_debug
+  rts
+
+store_char_mode_player_explosion_bottom_left:
+  lda player_effect_x_lo
+  sta SPRITE3_X
+  lda player_effect_y
+  sta SPRITE3_Y
+  lda SPRITE_X_MSB
+  and #%11110111
+  ldy player_effect_x_hi
+  beq store_char_mode_player_explosion_bottom_left_msb_done
+  ora #PLAYER_BOTTOM_LEFT_SPRITE_MASK
+store_char_mode_player_explosion_bottom_left_msb_done:
+  sta SPRITE_X_MSB
+  lda player_effect_pointer
+  sta SPRITE_POINTERS + 3
+  lda player_effect_color
+  sta SPRITE3_COLOR
+  lda SPRITE_MULTICOLOR
+  ora #PLAYER_BOTTOM_LEFT_SPRITE_MASK
+  sta SPRITE_MULTICOLOR
+  lda SPRITE_ENABLE
+  ora #PLAYER_BOTTOM_LEFT_SPRITE_MASK
+  sta SPRITE_ENABLE
+  rts
+
+store_char_mode_player_explosion_bottom_right:
+  lda player_effect_x_lo
+  sta SPRITE4_X
+  lda player_effect_y
+  sta SPRITE4_Y
+  lda SPRITE_X_MSB
+  and #%11101111
+  ldy player_effect_x_hi
+  beq store_char_mode_player_explosion_bottom_right_msb_done
+  ora #PLAYER_BOTTOM_RIGHT_SPRITE_MASK
+store_char_mode_player_explosion_bottom_right_msb_done:
+  sta SPRITE_X_MSB
+  lda player_effect_pointer
+  sta SPRITE_POINTERS + 4
+  lda player_effect_color
+  sta SPRITE4_COLOR
+  lda SPRITE_MULTICOLOR
+  ora #PLAYER_BOTTOM_RIGHT_SPRITE_MASK
+  sta SPRITE_MULTICOLOR
+  lda SPRITE_ENABLE
+  ora #PLAYER_BOTTOM_RIGHT_SPRITE_MASK
+  sta SPRITE_ENABLE
+  lda #(PLAYER_BOTTOM_LEFT_SPRITE_MASK | PLAYER_BOTTOM_RIGHT_SPRITE_MASK)
+  sta player_bottom_sprite_mask_debug
+  rts
+
+disable_char_mode_dive_sprite:
+  lda formation_renderer_mode
+  cmp #FORMATION_RENDERER_MODE_CHAR
+  bne disable_char_mode_dive_sprite_done
+  lda SPRITE_ENABLE
+  and #%11111110
+  sta SPRITE_ENABLE
+  lda SPRITE_X_MSB
+  and #%11111110
+  sta SPRITE_X_MSB
+  lda SPRITE_MULTICOLOR
+  and #%11111110
+  sta SPRITE_MULTICOLOR
+disable_char_mode_dive_sprite_done:
+  rts
+
+disable_char_mode_dynamic_sprites:
+  lda SPRITE_ENABLE
+  and #CHAR_MODE_STATIC_SPRITE_MASK
+  sta SPRITE_ENABLE
+  lda SPRITE_X_MSB
+  and #CHAR_MODE_STATIC_SPRITE_MASK
+  sta SPRITE_X_MSB
+  lda SPRITE_MULTICOLOR
+  and #CHAR_MODE_STATIC_SPRITE_MASK
+  sta SPRITE_MULTICOLOR
+  rts
+
+render_char_mode_top_sprites:
+  jsr disable_char_mode_dynamic_sprites
+  lda dive_active
+  beq render_char_mode_top_effects
+  jsr store_dive_position
+render_char_mode_top_effects:
+  jmp render_char_mode_enemy_effects
+
+render_char_mode_enemy_effects:
+  ldx #$00
+  ldy #$00
+render_char_mode_enemy_effects_loop:
+  lda slot_explosion_timer, x
+  beq render_char_mode_enemy_effects_next
+  cpy #CHAR_MODE_EFFECT_SLOT_COUNT
+  bcs render_char_mode_enemy_effects_done
+  stx char_mode_effect_source_slot
+  sty char_mode_effect_target_slot
+  ldy slot_explosion_frame, x
+  lda enemy_explosion_sequence, y
+  sta enemy_explosion_pointer
+  ldx char_mode_effect_source_slot
+  ldy char_mode_effect_target_slot
+  jsr store_char_mode_enemy_effect
+  ldy char_mode_effect_target_slot
+  iny
+render_char_mode_enemy_effects_next:
+  inx
+  cpx #$06
+  bcc render_char_mode_enemy_effects_loop
+render_char_mode_enemy_effects_done:
+  rts
+
+store_char_mode_enemy_effect:
+  tya
+  beq store_char_mode_enemy_effect_slot0
+  cmp #$01
+  beq store_char_mode_enemy_effect_slot1_jump
+  cmp #$02
+  beq store_char_mode_enemy_effect_slot2_jump
+  cmp #$03
+  beq store_char_mode_enemy_effect_slot3_jump
+  jmp store_char_mode_enemy_effect_slot4
+
+store_char_mode_enemy_effect_slot1_jump:
+  jmp store_char_mode_enemy_effect_slot1
+
+store_char_mode_enemy_effect_slot2_jump:
+  jmp store_char_mode_enemy_effect_slot2
+
+store_char_mode_enemy_effect_slot3_jump:
+  jmp store_char_mode_enemy_effect_slot3
+
+store_char_mode_enemy_effect_slot0:
+  lda explosion_slot_x_lo, x
+  sta SPRITE3_X
+  lda explosion_slot_y, x
+  sta SPRITE3_Y
+  lda SPRITE_X_MSB
+  and #%11110111
+  ldy explosion_slot_x_hi, x
+  beq store_char_mode_enemy_effect_slot0_msb_done
+  ora #SPRITE3_MASK
+store_char_mode_enemy_effect_slot0_msb_done:
+  sta SPRITE_X_MSB
+  lda SPRITE_MULTICOLOR
+  and #%11110111
+  sta SPRITE_MULTICOLOR
+  lda enemy_explosion_pointer
+  sta SPRITE_POINTERS + 3
+  lda #ENEMY_EXPLOSION_COLOR
+  sta SPRITE3_COLOR
+  lda SPRITE_ENABLE
+  ora #SPRITE3_MASK
+  sta SPRITE_ENABLE
+  rts
+
+store_char_mode_enemy_effect_slot1:
+  lda explosion_slot_x_lo, x
+  sta SPRITE4_X
+  lda explosion_slot_y, x
+  sta SPRITE4_Y
+  lda SPRITE_X_MSB
+  and #%11101111
+  ldy explosion_slot_x_hi, x
+  beq store_char_mode_enemy_effect_slot1_msb_done
+  ora #SPRITE4_MASK
+store_char_mode_enemy_effect_slot1_msb_done:
+  sta SPRITE_X_MSB
+  lda SPRITE_MULTICOLOR
+  and #%11101111
+  sta SPRITE_MULTICOLOR
+  lda enemy_explosion_pointer
+  sta SPRITE_POINTERS + 4
+  lda #ENEMY_EXPLOSION_COLOR
+  sta SPRITE4_COLOR
+  lda SPRITE_ENABLE
+  ora #SPRITE4_MASK
+  sta SPRITE_ENABLE
+  rts
+
+store_char_mode_enemy_effect_slot2:
+  lda explosion_slot_x_lo, x
+  sta SPRITE5_X
+  lda explosion_slot_y, x
+  sta SPRITE5_Y
+  lda SPRITE_X_MSB
+  and #%11011111
+  ldy explosion_slot_x_hi, x
+  beq store_char_mode_enemy_effect_slot2_msb_done
+  ora #SPRITE5_MASK
+store_char_mode_enemy_effect_slot2_msb_done:
+  sta SPRITE_X_MSB
+  lda SPRITE_MULTICOLOR
+  and #%11011111
+  sta SPRITE_MULTICOLOR
+  lda enemy_explosion_pointer
+  sta SPRITE_POINTERS + 5
+  lda #ENEMY_EXPLOSION_COLOR
+  sta SPRITE5_COLOR
+  lda SPRITE_ENABLE
+  ora #SPRITE5_MASK
+  sta SPRITE_ENABLE
+  rts
+
+store_char_mode_enemy_effect_slot3:
+  lda explosion_slot_x_lo, x
+  sta SPRITE6_X
+  lda explosion_slot_y, x
+  sta SPRITE6_Y
+  lda SPRITE_X_MSB
+  and #%10111111
+  ldy explosion_slot_x_hi, x
+  beq store_char_mode_enemy_effect_slot3_msb_done
+  ora #SPRITE6_MASK
+store_char_mode_enemy_effect_slot3_msb_done:
+  sta SPRITE_X_MSB
+  lda SPRITE_MULTICOLOR
+  and #%10111111
+  sta SPRITE_MULTICOLOR
+  lda enemy_explosion_pointer
+  sta SPRITE_POINTERS + 6
+  lda #ENEMY_EXPLOSION_COLOR
+  sta SPRITE6_COLOR
+  lda SPRITE_ENABLE
+  ora #SPRITE6_MASK
+  sta SPRITE_ENABLE
+  rts
+
+store_char_mode_enemy_effect_slot4:
+  lda explosion_slot_x_lo, x
+  sta SPRITE7_X
+  lda explosion_slot_y, x
+  sta SPRITE7_Y
+  lda SPRITE_X_MSB
+  and #%01111111
+  ldy explosion_slot_x_hi, x
+  beq store_char_mode_enemy_effect_slot4_msb_done
+  ora #SPRITE7_MASK
+store_char_mode_enemy_effect_slot4_msb_done:
+  sta SPRITE_X_MSB
+  lda SPRITE_MULTICOLOR
+  and #%01111111
+  sta SPRITE_MULTICOLOR
+  lda enemy_explosion_pointer
+  sta SPRITE_POINTERS + 7
+  lda #ENEMY_EXPLOSION_COLOR
+  sta SPRITE7_COLOR
+  lda SPRITE_ENABLE
+  ora #SPRITE7_MASK
+  sta SPRITE_ENABLE
+  rts
 
 * = $5300 "Formation Char Bitmap Data"
 
@@ -4896,6 +5346,9 @@ player_explosion_sprites:
 * = $4b00 "Explosion Frame Routines"
 
 set_slot_explosion_frame:
+  lda formation_renderer_mode
+  cmp #FORMATION_RENDERER_MODE_CHAR
+  beq set_slot_explosion_skip
   tax
   jsr slot_reserved_for_player_bottom
   bcs set_slot_explosion_skip
