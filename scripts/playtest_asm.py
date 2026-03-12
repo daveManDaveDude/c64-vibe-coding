@@ -629,6 +629,10 @@ class Playtester:
                 formation_char_render_mask |= (
                     self.monitor.mem_get(self.symbols["formation_char_render_mask_hi"], 1)[0] << 8
                 )
+            if "formation_char_render_mask_hi2" in self.symbols:
+                formation_char_render_mask |= (
+                    self.monitor.mem_get(self.symbols["formation_char_render_mask_hi2"], 1)[0] << 16
+                )
         formation_shift_phase = None
         if "formation_shift_phase" in self.symbols:
             formation_shift_phase = self.monitor.mem_get(self.symbols["formation_shift_phase"], 1)[0]
