@@ -21,14 +21,7 @@ SCREEN_ORIGIN_Y = 50
 SCREEN_WIDTH = 320
 SCREEN_HEIGHT = 200
 FORMATION_BITMAP_PATH = Path(__file__).resolve().parent.parent / "src" / "generated_formation_char_bitmap.bin"
-FORMATION_ANIMATION_SEQUENCES = (
-    (0, 1, 0, 1),
-    (0, 1, 0, 1),
-    (2, 3, 2, 3),
-    (2, 3, 2, 3),
-    (4, 5, 4, 5),
-    (4, 5, 4, 5),
-)
+FORMATION_ANIMATION_SEQUENCE = (0, 1, 0, 1)
 C64_RGBA_PALETTE = (
     (0x00, 0x00, 0x00, 0xFF),
     (0xFF, 0xFF, 0xFF, 0xFF),
@@ -98,6 +91,34 @@ def draw_pixel(rows: list[list[tuple[int, int, int, int]]], x: int, y: int, colo
         rows[y][x] = color
 
 
+def formation_slot_count(sample: dict, symbols: dict) -> int:
+    return sample.get("formation_slot_count", symbols.get("FORMATION_SLOT_COUNT", 6))
+
+
+def formation_slot_row(symbols: dict, slot_index: int) -> int:
+    if slot_index < 2:
+        return symbols["FORMATION_CHAR_BAND_TOP_ROW"]
+    if slot_index < 4:
+        return symbols["FORMATION_CHAR_BAND_MID_ROW"]
+    return symbols["FORMATION_CHAR_BAND_BOTTOM_ROW"]
+
+
+def formation_slot_color(symbols: dict, slot_index: int) -> int:
+    if slot_index < 2:
+        return symbols["FLAGSHIP_COLOR"]
+    if slot_index < 4:
+        return symbols["ESCORT_COLOR"]
+    return symbols["GRUNT_COLOR"]
+
+
+def formation_slot_frame_base(slot_index: int) -> int:
+    if slot_index < 2:
+        return 0
+    if slot_index < 4:
+        return 2
+    return 4
+
+
 def draw_formation_slot(
     rows: list[list[tuple[int, int, int, int]]],
     sample: dict,
@@ -110,17 +131,8 @@ def draw_formation_slot(
     if sample.get("dive_active") and sample.get("dive_slot") == slot_index:
         return
 
-    top_row = symbols["FORMATION_CHAR_BAND_TOP_ROW"]
-    mid_row = symbols["FORMATION_CHAR_BAND_MID_ROW"]
-    row = (top_row, top_row, mid_row, mid_row, symbols["FORMATION_CHAR_BAND_BOTTOM_ROW"], symbols["FORMATION_CHAR_BAND_BOTTOM_ROW"])[slot_index]
-    slot_color = (
-        symbols["FLAGSHIP_COLOR"],
-        symbols["FLAGSHIP_COLOR"],
-        symbols["ESCORT_COLOR"],
-        symbols["ESCORT_COLOR"],
-        symbols["GRUNT_COLOR"],
-        symbols["GRUNT_COLOR"],
-    )[slot_index]
+    row = formation_slot_row(symbols, slot_index)
+    slot_color = formation_slot_color(symbols, slot_index)
     playfield_left = symbols["PLAYFIELD_LEFT_X_LO"] + (symbols["PLAYFIELD_LEFT_X_HI"] << 8)
     slot_x = sample[f"formation_{slot_index}_x"]
     relative_x = slot_x - playfield_left
@@ -130,7 +142,7 @@ def draw_formation_slot(
     shift_phase = char_relative_x & 0x07
     animation_shift = symbols["FORMATION_ANIMATION_SHIFT"]
     anim_index = (sample["formation_frame_value"] >> animation_shift) & 0x03
-    formation_char_value = FORMATION_ANIMATION_SEQUENCES[slot_index][anim_index]
+    formation_char_value = formation_slot_frame_base(slot_index) + FORMATION_ANIMATION_SEQUENCE[anim_index]
     frame_offset = (formation_char_value << 8) + (shift_phase << 5)
     glyph_bytes = formation_bitmap_data[frame_offset : frame_offset + 32]
 
@@ -165,7 +177,7 @@ def render_sample_frame(sample: dict, symbols: dict, formation_bitmap_data: byte
         for x in range(SCREEN_ORIGIN_X, SCREEN_ORIGIN_X + SCREEN_WIDTH):
             rows[y][x] = background_color
 
-    for slot_index in range(6):
+    for slot_index in range(formation_slot_count(sample, symbols)):
         draw_formation_slot(rows, sample, symbols, formation_bitmap_data, slot_index)
 
     return write_rgba_png(output_path, scaled_rows(rows, DISPLAY_SCALE))

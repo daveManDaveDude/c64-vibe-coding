@@ -69,12 +69,12 @@ def parse_target_slots(raw_value: str) -> list[int]:
         if not stripped:
             continue
         slot = int(stripped, 10)
-        if slot < 0 or slot > 5:
-            raise ValueError(f"Invalid target slot {slot}; expected values in 0..5")
+        if slot < 0:
+            raise ValueError(f"Invalid target slot {slot}; expected a non-negative slot index")
         slots.append(slot)
     if not slots:
         raise ValueError("At least one target slot is required")
-    return slots
+    return sorted(set(slots))
 
 
 def reset_output_dir(path: Path) -> None:
@@ -83,9 +83,11 @@ def reset_output_dir(path: Path) -> None:
     path.mkdir(parents=True, exist_ok=True)
 
 
-def write_monitor_commands(path: Path, symbols: dict[str, int], target_slots: list[int]) -> None:
+def write_monitor_commands(
+    path: Path, symbols: dict[str, int], target_slots: list[int], formation_slot_count: int
+) -> None:
     lines = []
-    for slot_index in range(6):
+    for slot_index in range(formation_slot_count):
         if slot_index in target_slots:
             continue
         symbol_name = f"formation_slot{slot_index}_alive"
@@ -165,7 +167,10 @@ def apply_top_row_only_patch(
     if "formation_slot0_alive" not in playtester.symbols:
         raise PlaytestFailure("Missing formation_slot0_alive symbol for binary monitor patch")
 
-    patch_values = bytes(1 if slot_index in target_slots else 0 for slot_index in range(6))
+    patch_values = bytes(
+        1 if slot_index in target_slots else 0
+        for slot_index in range(playtester.formation_slot_count)
+    )
     logger.log("Patching lower-row alive flags through the binary monitor")
     playtester.monitor.mem_set(playtester.symbols["formation_slot0_alive"], patch_values)
     deadline = time.time() + timeout
@@ -206,7 +211,7 @@ def capture_enriched_sample(
     sample["formation_frame_value"] = read_symbol_u8(playtester, "formation_frame")
     sample["slot_0_visual_y"] = playtester.slot_visual_y(sample, 0)
     sample["slot_1_visual_y"] = playtester.slot_visual_y(sample, 1)
-    dive_slot = normalize_dive_slot(sample.get("dive_slot"))
+    dive_slot = normalize_dive_slot(sample.get("dive_slot"), playtester.formation_slot_count)
     sample["dive_expected_y"] = (
         playtester.slot_visual_y(sample, dive_slot) if dive_slot is not None else None
     )
@@ -256,10 +261,10 @@ def arm_enemy_attack(
     raise PlaytestFailure(f"Timed out waiting for enemy attack arm state: {latest}")
 
 
-def normalize_dive_slot(raw_slot: Optional[int]) -> Optional[int]:
+def normalize_dive_slot(raw_slot: Optional[int], formation_slot_count: int) -> Optional[int]:
     if raw_slot is None:
         return None
-    if 0 <= raw_slot <= 5:
+    if 0 <= raw_slot < formation_slot_count:
         return raw_slot
     return None
 
@@ -280,7 +285,7 @@ def destroy_next_diver_for_prune(playtester: Playtester, logger: Logger, name: s
             max_samples=40,
             sample_interval=0.20,
         )
-        dive_slot = normalize_dive_slot(launch.get("dive_slot"))
+        dive_slot = normalize_dive_slot(launch.get("dive_slot"), playtester.formation_slot_count)
         if dive_slot is None:
             attempts.append({"attempt": attempt, "launch": launch, "result": "invalid_slot"})
             continue
@@ -312,7 +317,12 @@ def destroy_next_diver_for_prune(playtester: Playtester, logger: Logger, name: s
             )
 
             if not shot_fired:
-                if not current["dive_active"] or normalize_dive_slot(current.get("dive_slot")) != dive_slot:
+                if (
+                    not current["dive_active"]
+                    or normalize_dive_slot(
+                        current.get("dive_slot"), playtester.formation_slot_count
+                    ) != dive_slot
+                ):
                     attempt_detail["result"] = "dive_ended_before_fire"
                     attempt_detail["final_sample"] = current
                     break
@@ -359,7 +369,10 @@ def destroy_next_diver_for_prune(playtester: Playtester, logger: Logger, name: s
                 return attempt_detail
 
             if not current["shot_enabled"] and (
-                not current["dive_active"] or normalize_dive_slot(current.get("dive_slot")) != dive_slot
+                not current["dive_active"]
+                or normalize_dive_slot(
+                    current.get("dive_slot"), playtester.formation_slot_count
+                ) != dive_slot
             ):
                 attempt_detail["result"] = "miss"
                 attempt_detail["final_sample"] = current
@@ -461,6 +474,14 @@ def main() -> int:
 
     try:
         playtester.launch_vice()
+        invalid_target_slots = [
+            slot for slot in target_slots if slot >= playtester.formation_slot_count
+        ]
+        if invalid_target_slots:
+            raise PlaytestFailure(
+                f"Invalid target slots for current build: {invalid_target_slots}; "
+                f"formation_slot_count={playtester.formation_slot_count}"
+            )
         ready = playtester.wait_for_game_ready()
         result["ready_state"] = ready
 

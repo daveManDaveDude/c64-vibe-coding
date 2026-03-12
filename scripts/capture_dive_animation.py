@@ -16,6 +16,7 @@ SPRITE0_X = 0xD000
 SPRITE0_Y = 0xD001
 SPRITE1_Y = 0xD003
 SPRITE_ENABLE = 0xD015
+FORMATION_SPRITE_MASKS = (0x01, 0x08, 0x10, 0x20, 0x40, 0x80)
 
 
 def connect_monitor() -> BinaryMonitor:
@@ -43,9 +44,14 @@ def combine_x(low: int, high: int) -> int:
 
 
 def logical_alive_count(monitor: BinaryMonitor, symbols: dict[str, int], sprite_enable: int) -> int:
+    formation_slot_count = symbols.get("FORMATION_SLOT_COUNT", len(FORMATION_SPRITE_MASKS))
     if "formation_slot0_alive" in symbols:
-        return sum(1 for value in monitor.mem_get(symbols["formation_slot0_alive"], 6) if value != 0)
-    return sum(1 for mask in (0x01, 0x08, 0x10, 0x20, 0x40, 0x80) if sprite_enable & mask)
+        return sum(
+            1
+            for value in monitor.mem_get(symbols["formation_slot0_alive"], formation_slot_count)
+            if value != 0
+        )
+    return sum(1 for mask in FORMATION_SPRITE_MASKS if sprite_enable & mask)
 
 
 def wait_for_game_ready(monitor: BinaryMonitor, symbols: dict[str, int], timeout_seconds: float) -> None:

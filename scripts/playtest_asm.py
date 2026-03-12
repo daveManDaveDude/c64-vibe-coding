@@ -51,7 +51,7 @@ LEFT_MASK = 0x04
 RIGHT_MASK = 0x08
 FIRE_MASK = 0x10
 SHOT_SPRITE_MASK = 0x04
-INITIAL_FORMATION_ALIVE_COUNT = 6
+DEFAULT_FORMATION_SLOT_COUNT = 6
 FORMATION_RENDERER_CHAR = 1
 FORMATION_RENDERER_NAMES = {
     1: "char",
@@ -371,6 +371,8 @@ class Playtester:
         self.args = args
         self.logger = logger
         self.symbols = load_symbols(args.prg.with_suffix(".sym"))
+        self.formation_slot_count = self.symbols.get("FORMATION_SLOT_COUNT", DEFAULT_FORMATION_SLOT_COUNT)
+        self.formation_sprite_masks = [0x01, 0x08, 0x10, 0x20, 0x40, 0x80]
         capture_region = f"{args.window_x},{args.window_y},{args.window_width},{args.window_height}"
         self.gui = MacOSGui(args.process_name, logger, capture_region)
         self.monitor = None
@@ -557,21 +559,26 @@ class Playtester:
     def read_state(self, include_joystick: bool = True):
         vic_data = self.monitor.mem_get(SPRITE0_X, (SPRITE_ENABLE - SPRITE0_X) + 1)
         joystick_value = self.monitor.mem_get(JOYSTICK_PORT_2, 1)[0] if include_joystick else None
+        formation_slot_count = self.formation_slot_count
         alive_data = None
         if "formation_slot0_alive" in self.symbols:
-            alive_data = self.monitor.mem_get(self.symbols["formation_slot0_alive"], INITIAL_FORMATION_ALIVE_COUNT)
+            alive_data = self.monitor.mem_get(self.symbols["formation_slot0_alive"], formation_slot_count)
         formation_renderer_mode = FORMATION_RENDERER_CHAR
         if "formation_renderer_mode" in self.symbols:
             formation_renderer_mode = self.monitor.mem_get(self.symbols["formation_renderer_mode"], 1)[0]
         formation_position_data = None
         if "formation_slot0_x_lo" in self.symbols:
-            formation_position_data = self.monitor.mem_get(self.symbols["formation_slot0_x_lo"], INITIAL_FORMATION_ALIVE_COUNT * 2)
+            formation_position_data = self.monitor.mem_get(
+                self.symbols["formation_slot0_x_lo"], formation_slot_count * 2
+            )
         dive_active = False
         dive_slot = None
         if "dive_active" in self.symbols:
             dive_active = self.monitor.mem_get(self.symbols["dive_active"], 1)[0] != 0
         if "dive_slot" in self.symbols:
-            dive_slot = self.monitor.mem_get(self.symbols["dive_slot"], 1)[0]
+            raw_dive_slot = self.monitor.mem_get(self.symbols["dive_slot"], 1)[0]
+            if raw_dive_slot < formation_slot_count:
+                dive_slot = raw_dive_slot
         dive_x = None
         dive_y = None
         if dive_active and "dive_x_lo" in self.symbols and "dive_x_hi" in self.symbols:
@@ -635,6 +642,8 @@ class Playtester:
             if formation_position_data is None:
                 sprite_offsets = [SPRITE0_X, SPRITE3_X, SPRITE4_X, SPRITE5_X, SPRITE6_X, SPRITE7_X]
                 sprite_bits = [0, 3, 4, 5, 6, 7]
+                if index >= len(sprite_offsets):
+                    return 0
                 return combine_sprite_x(vic(sprite_offsets[index]), msb, sprite_bits[index])
             base = index * 2
             return formation_position_data[base] | (formation_position_data[base + 1] << 8)
@@ -643,36 +652,23 @@ class Playtester:
         sprite_enable = vic(SPRITE_ENABLE)
         active_sprite_slots = [index for index in range(8) if sprite_enable & (1 << index)]
         shot_sprite_enabled = (sprite_enable & SHOT_SPRITE_MASK) != 0
-        slot_rows = [
-            self.symbols.get("FORMATION_TOP_Y", vic(SPRITE0_Y)),
-            self.symbols.get("FORMATION_TOP_Y", vic(SPRITE0_Y)),
-            self.symbols.get("FORMATION_MID_Y", vic(SPRITE4_Y)),
-            self.symbols.get("FORMATION_MID_Y", vic(SPRITE4_Y)),
-            self.symbols.get("FORMATION_BOTTOM_Y", vic(SPRITE6_Y)),
-            self.symbols.get("FORMATION_BOTTOM_Y", vic(SPRITE6_Y)),
-        ]
+        slot_rows = [self.slot_visual_y({}, index) for index in range(formation_slot_count)]
         active_formation_rows = [
             slot_rows[index]
-            for index in range(INITIAL_FORMATION_ALIVE_COUNT)
+            for index in range(formation_slot_count)
             if (alive_data[index] != 0 if alive_data is not None else True)
             and not (dive_active and dive_slot == index)
         ]
         formation_logical_alive_count = sum(
-            1 for index in range(INITIAL_FORMATION_ALIVE_COUNT) if alive_data[index] != 0
+            1 for index in range(formation_slot_count) if alive_data[index] != 0
         ) if alive_data is not None else sum(
             1
-            for mask in (0x01, 0x08, 0x10, 0x20, 0x40, 0x80)
+            for mask in self.formation_sprite_masks
             if sprite_enable & mask
         )
         state = {
             "player_x": combine_sprite_x(vic(SPRITE1_X), msb, 1),
             "player_y": vic(SPRITE1_Y),
-            "formation_0_x": formation_slot_x(0),
-            "formation_1_x": formation_slot_x(1),
-            "formation_2_x": formation_slot_x(2),
-            "formation_3_x": formation_slot_x(3),
-            "formation_4_x": formation_slot_x(4),
-            "formation_5_x": formation_slot_x(5),
             "formation_y": min(active_formation_rows) if active_formation_rows else vic(SPRITE0_Y),
             "shot_x": combine_sprite_x(vic(SPRITE2_X), msb, 2),
             "shot_y": vic(SPRITE2_Y),
@@ -689,6 +685,7 @@ class Playtester:
             "shot_enabled": shot_sprite_enabled,
             "formation_renderer_mode": formation_renderer_mode,
             "formation_renderer_mode_name": describe_renderer_mode(formation_renderer_mode),
+            "formation_slot_count": formation_slot_count,
             "formation_logical_alive_count": formation_logical_alive_count,
             "formation_char_render_mask": formation_char_render_mask,
             "formation_shift_phase": formation_shift_phase,
@@ -714,23 +711,18 @@ class Playtester:
             "dive_anim_frame": dive_anim_frame,
             "dive_anim_tick": dive_anim_tick,
             "dive_sprite_pointer": dive_sprite_pointer,
-            "formation_0_enabled": (sprite_enable & 0x01) != 0,
-            "formation_1_enabled": (sprite_enable & 0x08) != 0,
-            "formation_2_enabled": (sprite_enable & 0x10) != 0,
-            "formation_3_enabled": (sprite_enable & 0x20) != 0,
-            "formation_4_enabled": (sprite_enable & 0x40) != 0,
-            "formation_5_enabled": (sprite_enable & 0x80) != 0,
-            "formation_0_alive": alive_data[0] != 0 if alive_data is not None else (sprite_enable & 0x01) != 0,
-            "formation_1_alive": alive_data[1] != 0 if alive_data is not None else (sprite_enable & 0x08) != 0,
-            "formation_2_alive": alive_data[2] != 0 if alive_data is not None else (sprite_enable & 0x10) != 0,
-            "formation_3_alive": alive_data[3] != 0 if alive_data is not None else (sprite_enable & 0x20) != 0,
-            "formation_4_alive": alive_data[4] != 0 if alive_data is not None else (sprite_enable & 0x40) != 0,
-            "formation_5_alive": alive_data[5] != 0 if alive_data is not None else (sprite_enable & 0x80) != 0,
             "joystick_port_2": joystick_value,
             "joystick_left_pressed": (joystick_value & LEFT_MASK) == 0 if include_joystick else False,
             "joystick_right_pressed": (joystick_value & RIGHT_MASK) == 0 if include_joystick else False,
             "joystick_fire_pressed": (joystick_value & FIRE_MASK) == 0 if include_joystick else False,
         }
+        for index in range(formation_slot_count):
+            sprite_mask = self.formation_sprite_masks[index] if index < len(self.formation_sprite_masks) else 0
+            state[f"formation_{index}_x"] = formation_slot_x(index)
+            state[f"formation_{index}_enabled"] = bool(sprite_mask and (sprite_enable & sprite_mask))
+            state[f"formation_{index}_alive"] = (
+                alive_data[index] != 0 if alive_data is not None else bool(sprite_mask and (sprite_enable & sprite_mask))
+            )
         return state
 
     def capture_sample(self, stage: str, include_joystick: bool = True):
@@ -856,7 +848,11 @@ class Playtester:
             "FORMATION_CHAR_BOTTOM_Y",
             playfield_top_y + (self.symbols.get("FORMATION_CHAR_BAND_BOTTOM_ROW", 0) * 8) - trim_top_rows,
         )
-        return (top_y, top_y, mid_y, mid_y, bottom_y, bottom_y)[slot_index]
+        if slot_index < 2:
+            return top_y
+        if slot_index < 4:
+            return mid_y
+        return bottom_y
 
     def assert_char_renderer_output(self, name: str, sample):
         if sample.get("formation_char_render_mask") is not None:
@@ -1169,37 +1165,14 @@ class Playtester:
         self.record_step(f"{stage_name}_idle", "passed", {"idle_one": idle_one, "idle_two": idle_two})
 
     def formation_slots(self, sample):
+        slot_count = sample.get("formation_slot_count", self.formation_slot_count)
         return [
             {
-                "index": 0,
-                "x": sample["formation_0_x"],
-                "alive": sample["formation_0_alive"],
-            },
-            {
-                "index": 1,
-                "x": sample["formation_1_x"],
-                "alive": sample["formation_1_alive"],
-            },
-            {
-                "index": 2,
-                "x": sample["formation_2_x"],
-                "alive": sample["formation_2_alive"],
-            },
-            {
-                "index": 3,
-                "x": sample["formation_3_x"],
-                "alive": sample["formation_3_alive"],
-            },
-            {
-                "index": 4,
-                "x": sample["formation_4_x"],
-                "alive": sample["formation_4_alive"],
-            },
-            {
-                "index": 5,
-                "x": sample["formation_5_x"],
-                "alive": sample["formation_5_alive"],
-            },
+                "index": index,
+                "x": sample[f"formation_{index}_x"],
+                "alive": sample[f"formation_{index}_alive"],
+            }
+            for index in range(slot_count)
         ]
 
     def live_formation_slots(self, sample):
@@ -1400,10 +1373,10 @@ class Playtester:
             {"symbols": self.symbols},
         )
 
-        visual_y_table = list(self.monitor.mem_get(visual_y_table_symbol, INITIAL_FORMATION_ALIVE_COUNT))
+        visual_y_table = list(self.monitor.mem_get(visual_y_table_symbol, self.formation_slot_count))
         expected_visual_y_table = [
             self.slot_visual_y({}, slot_index)
-            for slot_index in range(INITIAL_FORMATION_ALIVE_COUNT)
+            for slot_index in range(self.formation_slot_count)
         ]
         self.assert_true(
             f"{name}_visual_y_table",
@@ -1553,16 +1526,44 @@ class Playtester:
 
     def align_player_with_gap(self):
         self.logger.log("Aligning the player ship under a persistent gap before arming enemy dives")
+        playing_state = self.symbols.get("GAME_STATE_PLAYING", 1)
+        player_min_x = self.symbols["PLAYER_MIN_X_LO"] + (self.symbols["PLAYER_MIN_X_HI"] << 8)
+        player_max_x = self.symbols["PLAYER_MAX_X_LO"] + (self.symbols["PLAYER_MAX_X_HI"] << 8)
         last_detail = None
-        for _ in range(20):
+        for _ in range(40):
             current = self.capture_sample("gap-align-check", include_joystick=False)
+            if (
+                not current.get("player_enabled")
+                or current.get("player_explosion_active")
+                or current.get("player_respawn_timer", 0) != 0
+                or current.get("game_state") != playing_state
+            ):
+                last_detail = {"slot": None, "sample": current, "mode": "waiting-for-recovery"}
+                self.resume_for(0.15)
+                continue
+
             dead_slots = [slot for slot in self.formation_slots(current) if not slot["alive"]]
             if not dead_slots:
                 detail = {"slot": None, "sample": current, "mode": "no-gap"}
                 self.record_step("player_gap_aligned", "skipped", detail)
                 return detail
 
-            target_slot = min(dead_slots, key=lambda slot: abs(slot["x"] - current["player_x"]))
+            reachable_dead_slots = [
+                slot
+                for slot in dead_slots
+                if (player_min_x - 10) <= slot["x"] <= (player_max_x + 10)
+            ]
+            if not reachable_dead_slots:
+                target_slot = min(dead_slots, key=lambda slot: abs(slot["x"] - current["player_x"]))
+                last_detail = {
+                    "slot": target_slot["index"],
+                    "sample": current,
+                    "mode": "gap-out-of-range",
+                }
+                self.resume_for(0.15)
+                continue
+
+            target_slot = min(reachable_dead_slots, key=lambda slot: abs(slot["x"] - current["player_x"]))
             delta = current["player_x"] - target_slot["x"]
             last_detail = {"slot": target_slot["index"], "sample": current, "mode": "gap"}
             if abs(delta) <= 10:
@@ -1594,7 +1595,7 @@ class Playtester:
             self.assert_true(
                 f"fire_{attempt}_shot_spawned",
                 launched["shot_enabled"]
-                or self.total_formation_alive_count(launched) < INITIAL_FORMATION_ALIVE_COUNT,
+                or self.total_formation_alive_count(launched) < self.formation_slot_count,
                 launched,
             )
             return launched
@@ -1827,7 +1828,7 @@ class Playtester:
         destroyed_slot = destroyed_slots[0]
         self.assert_true(
             "gap_alive_count",
-            self.total_formation_alive_count(follow_up) == INITIAL_FORMATION_ALIVE_COUNT - 1,
+            self.total_formation_alive_count(follow_up) == self.formation_slot_count - 1,
             follow_up,
         )
         current_destroyed_slots = [
@@ -2040,10 +2041,11 @@ class Playtester:
             max_samples=120,
             sample_interval=0.15,
         )
-        self.arm_enemy_attacks()
+        armed_dive_state = self.arm_enemy_attacks()
         dive_resolution_state = self.run_without_host_capture(
             self.resolve_dive_and_verify_gap,
             "formation_char_dive_resolved",
+            initial_sample=armed_dive_state,
         )
         post_dive_idle_state = self.assert_post_dive_idle_motion(
             "pack_gap_dive_idle_regression",
