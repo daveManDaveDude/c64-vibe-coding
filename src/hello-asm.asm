@@ -77,7 +77,7 @@ BasicUpstart2(start)
 .label GRUNT_DIVE_COLOR = $0b
 .label HIT_FLASH_COLOR = $01
 .label BORDER_BASE_COLOR = $06
-.label FORMATION_START_X_LO = $58
+.label FORMATION_START_X_LO = $5b
 .label FORMATION_START_X_HI = $00
 .label FORMATION_TOP_Y = 68
 .label FORMATION_MID_Y = 92
@@ -91,16 +91,22 @@ BasicUpstart2(start)
 .label FORMATION_CHAR_BOTTOM_Y = FORMATION_CHAR_BAND_BOTTOM_Y - FORMATION_CHAR_TRIM_TOP_ROWS
 .label FORMATION_SCROLL_START_RASTER = FORMATION_CHAR_BAND_TOP_Y - 1
 .label FORMATION_SCROLL_END_RASTER = FORMATION_CHAR_BAND_BOTTOM_Y + 8 - 1
-.label FORMATION_CHAR_MIN_X_LO = $1c
+.label FORMATION_CHAR_MIN_X_LO = $1a
 .label FORMATION_CHAR_MIN_X_HI = $00
-.label FORMATION_CHAR_MAX_X_LO = $1e
+.label FORMATION_CHAR_MAX_X_LO = $24
 .label FORMATION_CHAR_MAX_X_HI = $01
 .label FORMATION_SLOT0_OFFSET = 0
-.label FORMATION_SLOT1_OFFSET = 36
+.label FORMATION_SLOT1_OFFSET = 30
 .label FORMATION_SLOT2_OFFSET = 0
-.label FORMATION_SLOT3_OFFSET = 36
+.label FORMATION_SLOT3_OFFSET = 30
 .label FORMATION_SLOT4_OFFSET = 0
-.label FORMATION_SLOT5_OFFSET = 36
+.label FORMATION_SLOT5_OFFSET = 30
+.label FORMATION_CHAR_RIGHT_ONLY_MIN_X = ((FORMATION_CHAR_MIN_X_HI << 8) | FORMATION_CHAR_MIN_X_LO) - FORMATION_SLOT1_OFFSET
+.label FORMATION_CHAR_RIGHT_ONLY_MIN_X_LO = <FORMATION_CHAR_RIGHT_ONLY_MIN_X
+.label FORMATION_CHAR_RIGHT_ONLY_MIN_X_HI = >FORMATION_CHAR_RIGHT_ONLY_MIN_X
+.label FORMATION_CHAR_SINGLE_COLUMN_MAX_X = ((FORMATION_CHAR_MAX_X_HI << 8) | FORMATION_CHAR_MAX_X_LO) + FORMATION_SLOT1_OFFSET
+.label FORMATION_CHAR_SINGLE_COLUMN_MAX_X_LO = <FORMATION_CHAR_SINGLE_COLUMN_MAX_X
+.label FORMATION_CHAR_SINGLE_COLUMN_MAX_X_HI = >FORMATION_CHAR_SINGLE_COLUMN_MAX_X
 .label ARCADE_SPRITE_PTR_BASE = $92
 .label FLAGSHIP_SPRITE0_PTR = ARCADE_SPRITE_PTR_BASE + 0
 .label FLAGSHIP_SPRITE1_PTR = ARCADE_SPRITE_PTR_BASE + 1
@@ -214,6 +220,8 @@ BasicUpstart2(start)
 .label ENEMY_EXPLOSION_SPRITE1_PTR = $e0
 .label ENEMY_EXPLOSION_SPRITE2_PTR = $e1
 .label ENEMY_EXPLOSION_SPRITE3_PTR = $e2
+.label ENEMY_EXPLOSION_HEIGHT = 21
+.label ENEMY_EXPLOSION_BOTTOM_OVERLAP_Y = PLAYER_BOTTOM_SPLIT_RASTER - (ENEMY_EXPLOSION_HEIGHT - 1)
 .label VIC_CTRL2_TEXT_MULTICOLOR = $18
 .label PLAYER_TOP_SPLIT_RASTER = 40
 .label PLAYER_BOTTOM_SPLIT_RASTER = 170
@@ -531,6 +539,7 @@ init_formation:
   sta formation_frame
   sta formation_anim_index
   jsr init_formation_renderer
+  jsr update_formation_bounds
   jsr update_formation_animation_state
   jsr update_formation_slot_positions
   jsr render_formation
@@ -1092,6 +1101,7 @@ update_formation_active:
   jmp formation_done
 
 formation_move_tick:
+  jsr update_formation_bounds
 
   lda formation_dir
   bpl formation_move_right
@@ -1103,21 +1113,21 @@ formation_move_left:
 formation_dec_low:
   dec formation_x_lo
 
-  lda formation_x_hi
-  cmp #FORMATION_CHAR_MIN_X_HI
-  bcc formation_clamp_min
-  beq formation_check_min_lo
-  jmp formation_store_x
-formation_check_min_lo:
   lda formation_x_lo
-  cmp #FORMATION_CHAR_MIN_X_LO
-  bcc formation_clamp_min
+  sec
+  sbc formation_bound_min_lo
+  lda formation_x_hi
+  sbc formation_bound_min_hi
+  bvc formation_check_min_sign
+  eor #$80
+formation_check_min_sign:
+  bmi formation_clamp_min
   jmp formation_store_x
 
 formation_clamp_min:
-  lda #FORMATION_CHAR_MIN_X_LO
+  lda formation_bound_min_lo
   sta formation_x_lo
-  lda #FORMATION_CHAR_MIN_X_HI
+  lda formation_bound_min_hi
   sta formation_x_hi
   lda #$01
   sta formation_dir
@@ -1129,19 +1139,21 @@ formation_move_right:
   inc formation_x_hi
 
 formation_check_max:
-  lda formation_x_hi
-  cmp #FORMATION_CHAR_MAX_X_HI
-  bcc formation_store_x
-  bne formation_clamp_char_max
   lda formation_x_lo
-  cmp #FORMATION_CHAR_MAX_X_LO
-  bcc formation_store_x
+  sec
+  sbc formation_bound_max_lo
+  lda formation_x_hi
+  sbc formation_bound_max_hi
+  bvc formation_check_max_sign
+  eor #$80
+formation_check_max_sign:
+  bmi formation_store_x
   jmp formation_clamp_char_max
 
 formation_clamp_char_max:
-  lda #FORMATION_CHAR_MAX_X_LO
+  lda formation_bound_max_lo
   sta formation_x_lo
-  lda #FORMATION_CHAR_MAX_X_HI
+  lda formation_bound_max_hi
   sta formation_x_hi
   lda #$ff
   sta formation_dir
@@ -1159,6 +1171,43 @@ update_formation_animation_state:
   }
   and #%00000011
   sta formation_anim_index
+  rts
+
+update_formation_bounds:
+  lda formation_slot0_alive
+  ora formation_slot2_alive
+  ora formation_slot4_alive
+  beq update_formation_bounds_right_only
+
+update_formation_bounds_left_ready:
+  lda #FORMATION_CHAR_MIN_X_LO
+  sta formation_bound_min_lo
+  lda #FORMATION_CHAR_MIN_X_HI
+  sta formation_bound_min_hi
+  jmp update_formation_bounds_check_right
+
+update_formation_bounds_right_only:
+  lda #FORMATION_CHAR_RIGHT_ONLY_MIN_X_LO
+  sta formation_bound_min_lo
+  lda #FORMATION_CHAR_RIGHT_ONLY_MIN_X_HI
+  sta formation_bound_min_hi
+
+update_formation_bounds_check_right:
+  lda formation_slot1_alive
+  ora formation_slot3_alive
+  ora formation_slot5_alive
+  beq update_formation_bounds_single_column
+  lda #FORMATION_CHAR_MAX_X_LO
+  sta formation_bound_max_lo
+  lda #FORMATION_CHAR_MAX_X_HI
+  sta formation_bound_max_hi
+  rts
+
+update_formation_bounds_single_column:
+  lda #FORMATION_CHAR_SINGLE_COLUMN_MAX_X_LO
+  sta formation_bound_max_lo
+  lda #FORMATION_CHAR_SINGLE_COLUMN_MAX_X_HI
+  sta formation_bound_max_hi
   rts
 
 update_dive_attack:
@@ -2703,7 +2752,17 @@ update_formation_slot_positions:
   adc #$00
   sta formation_slot5_x_hi
 
+  lda formation_slot0_alive
+  ora formation_slot2_alive
+  ora formation_slot4_alive
+  beq update_formation_shift_phase_right_only
   lda formation_x_lo
+  jmp update_formation_shift_phase_store
+
+update_formation_shift_phase_right_only:
+  lda formation_slot1_x_lo
+
+update_formation_shift_phase_store:
   sec
   sbc #PLAYFIELD_LEFT_X_LO
   and #%00000111
@@ -2739,9 +2798,11 @@ shot_store_x_done:
 draw_player_bottom_effects:
   lda player_explosion_active
   beq draw_player_bottom_effects_player
-  jmp draw_player_explosion
+  jsr draw_player_explosion
+  jmp render_char_mode_enemy_effects_bottom
 draw_player_bottom_effects_player:
-  jmp draw_player_extra_layers
+  jsr draw_player_extra_layers
+  jmp render_char_mode_enemy_effects_bottom
 
 draw_player_extra_layers:
   jmp draw_player_extra_layers_char
@@ -3132,30 +3193,10 @@ draw_formation_char_slot_common:
   sbc #PLAYFIELD_LEFT_X_HI
   sta formation_char_relative_hi
 
-  lda formation_char_relative_lo
-  sec
-  sbc formation_render_scroll_phase
-  sta formation_char_relative_lo
-  lda formation_char_relative_hi
-  sbc #$00
-  sta formation_char_relative_hi
-
-  lda formation_char_relative_lo
-  and #%00000111
-  sta formation_char_shift_phase_local
-
-  lsr formation_char_relative_hi
-  ror formation_char_relative_lo
-  lsr formation_char_relative_hi
-  ror formation_char_relative_lo
-  lsr formation_char_relative_hi
-  ror formation_char_relative_lo
-
-  lda formation_char_relative_lo
-  clc
-  adc #FORMATION_CHAR_BAND_ORIGIN_COL
-  sta formation_char_col
+  jsr prepare_formation_char_slot_column
   sta formation_char_last_col, x
+  lda formation_char_clear_count
+  sta formation_char_last_clear_count, x
 
   jsr update_formation_char_slot_glyphs
 
@@ -3188,17 +3229,7 @@ draw_formation_char_slot_common_loop:
 draw_formation_char_slot_common_done:
   rts
 
-clear_formation_char_slot_screen:
-  sty formation_char_row
-
-  lda formation_char_slot_x_lo
-  sec
-  sbc #PLAYFIELD_LEFT_X_LO
-  sta formation_char_relative_lo
-  lda formation_char_slot_x_hi
-  sbc #PLAYFIELD_LEFT_X_HI
-  sta formation_char_relative_hi
-
+prepare_formation_char_slot_column:
   lda formation_char_relative_lo
   sec
   sbc formation_render_scroll_phase
@@ -3206,6 +3237,20 @@ clear_formation_char_slot_screen:
   lda formation_char_relative_hi
   sbc #$00
   sta formation_char_relative_hi
+
+  lda #$00
+  sta formation_char_glyph_skip
+  lda #$04
+  sta formation_char_clear_count
+  lda formation_char_relative_hi
+  bpl prepare_formation_char_slot_column_shift
+  lda #$01
+  sta formation_char_glyph_skip
+
+prepare_formation_char_slot_column_shift:
+  lda formation_char_relative_lo
+  and #%00000111
+  sta formation_char_shift_phase_local
 
   lsr formation_char_relative_hi
   ror formation_char_relative_lo
@@ -3218,6 +3263,27 @@ clear_formation_char_slot_screen:
   clc
   adc #FORMATION_CHAR_BAND_ORIGIN_COL
   sta formation_char_col
+
+  lda formation_char_glyph_skip
+  beq prepare_formation_char_slot_column_done
+  lda #FORMATION_CHAR_BAND_ORIGIN_COL
+  sta formation_char_col
+prepare_formation_char_slot_column_done:
+  lda formation_char_col
+  rts
+
+clear_formation_char_slot_screen:
+  sty formation_char_row
+
+  lda formation_char_slot_x_lo
+  sec
+  sbc #PLAYFIELD_LEFT_X_LO
+  sta formation_char_relative_lo
+  lda formation_char_slot_x_hi
+  sbc #PLAYFIELD_LEFT_X_HI
+  sta formation_char_relative_hi
+
+  jsr prepare_formation_char_slot_column
 
   ldy formation_char_row
   lda screen_row_lo, y
@@ -3240,7 +3306,7 @@ clear_formation_char_slot_screen_loop:
   sta (COLOR_PTR), y
   iny
   inx
-  cpx #$04
+  cpx formation_char_clear_count
   bcc clear_formation_char_slot_screen_loop
 clear_formation_char_slot_screen_done:
   rts
@@ -3262,6 +3328,8 @@ clear_formation_char_slot_saved:
 
   lda formation_char_last_col, x
   tay
+  lda formation_char_last_clear_count, x
+  sta formation_char_clear_count
   ldx #$00
 clear_formation_char_slot_saved_loop:
   cpy #(FORMATION_CHAR_BAND_ORIGIN_COL + FORMATION_CHAR_BAND_WIDTH)
@@ -3272,7 +3340,7 @@ clear_formation_char_slot_saved_loop:
   sta (COLOR_PTR), y
   iny
   inx
-  cpx #$04
+  cpx formation_char_clear_count
   bcc clear_formation_char_slot_saved_loop
 clear_formation_char_slot_saved_done:
   pla
@@ -3367,6 +3435,14 @@ formation_dir:
   .byte $01
 formation_frame:
   .byte $00
+formation_bound_min_lo:
+  .byte FORMATION_CHAR_MIN_X_LO
+formation_bound_min_hi:
+  .byte FORMATION_CHAR_MIN_X_HI
+formation_bound_max_lo:
+  .byte FORMATION_CHAR_MAX_X_LO
+formation_bound_max_hi:
+  .byte FORMATION_CHAR_MAX_X_HI
 formation_slot0_x_lo:
   .byte FORMATION_START_X_LO + FORMATION_SLOT0_OFFSET
 formation_slot0_x_hi:
@@ -3591,7 +3667,13 @@ formation_char_relative_hi:
   .byte $00
 formation_char_shift_phase_local:
   .byte $00
+formation_char_glyph_skip:
+  .byte $00
+formation_char_clear_count:
+  .byte $04
 formation_char_last_col:
+  .fill 6, $00
+formation_char_last_clear_count:
   .fill 6, $00
 formation_char_render_mask_pending:
   .byte $00
@@ -3957,6 +4039,34 @@ render_char_mode_enemy_effects_next:
 render_char_mode_enemy_effects_done:
   rts
 
+render_char_mode_enemy_effects_bottom:
+  ldx #$00
+  ldy #$00
+render_char_mode_enemy_effects_bottom_loop:
+  lda slot_explosion_timer, x
+  beq render_char_mode_enemy_effects_bottom_next
+  lda explosion_slot_y, x
+  cmp #ENEMY_EXPLOSION_BOTTOM_OVERLAP_Y
+  bcc render_char_mode_enemy_effects_bottom_next
+  cpy #$03
+  bcs render_char_mode_enemy_effects_bottom_done
+  stx char_mode_effect_source_slot
+  sty char_mode_effect_target_slot
+  ldy slot_explosion_frame, x
+  lda enemy_explosion_sequence, y
+  sta enemy_explosion_pointer
+  ldx char_mode_effect_source_slot
+  ldy char_mode_effect_target_slot
+  jsr store_char_mode_enemy_effect_bottom
+  ldy char_mode_effect_target_slot
+  iny
+render_char_mode_enemy_effects_bottom_next:
+  inx
+  cpx #$06
+  bcc render_char_mode_enemy_effects_bottom_loop
+render_char_mode_enemy_effects_bottom_done:
+  rts
+
 store_char_mode_enemy_effect:
   tya
   beq store_char_mode_enemy_effect_slot0
@@ -3976,6 +4086,22 @@ store_char_mode_enemy_effect_slot2_jump:
 
 store_char_mode_enemy_effect_slot3_jump:
   jmp store_char_mode_enemy_effect_slot3
+
+store_char_mode_enemy_effect_bottom:
+  tya
+  beq store_char_mode_enemy_effect_bottom_slot0
+  cmp #$01
+  beq store_char_mode_enemy_effect_bottom_slot1
+  jmp store_char_mode_enemy_effect_bottom_slot2
+
+store_char_mode_enemy_effect_bottom_slot0:
+  jmp store_char_mode_enemy_effect_slot2
+
+store_char_mode_enemy_effect_bottom_slot1:
+  jmp store_char_mode_enemy_effect_slot3
+
+store_char_mode_enemy_effect_bottom_slot2:
+  jmp store_char_mode_enemy_effect_slot4
 
 store_char_mode_enemy_effect_slot0:
   lda explosion_slot_x_lo, x

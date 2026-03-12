@@ -794,8 +794,21 @@ class Playtester:
             "FORMATION_CHAR_BAND_ORIGIN_COL"
         ]
 
+    def char_code_is_visually_blank(self, value: int) -> bool:
+        if value == 0x20:
+            return True
+        required_symbols = {"CHARSET_RAM"}
+        missing = sorted(required_symbols - self.symbols.keys())
+        self.assert_true(
+            "formation_char_charset_symbols_present",
+            not missing,
+            {"missing": missing, "symbols": self.symbols},
+        )
+        bitmap = self.monitor.mem_get(self.symbols["CHARSET_RAM"] + (value * 8), 8)
+        return not any(bitmap)
+
     def formation_char_cells(self, sample, slot_index: int):
-        required_symbols = {"SCREEN_RAM"}
+        required_symbols = {"SCREEN_RAM", "CHARSET_RAM"}
         missing = sorted(required_symbols - self.symbols.keys())
         self.assert_true(
             "formation_char_cell_symbols_present",
@@ -806,21 +819,26 @@ class Playtester:
         col = self.formation_char_col(sample, slot_index)
         values = []
         addresses = []
+        visual_blank = []
         band_width = self.symbols.get("FORMATION_CHAR_BAND_WIDTH", 40)
         for offset in range(4):
             probe_col = col + offset
             if probe_col >= band_width:
                 addresses.append(None)
                 values.append(0x20)
+                visual_blank.append(True)
                 continue
             address = self.symbols["SCREEN_RAM"] + (row * 40) + probe_col
+            value = self.monitor.mem_get(address, 1)[0]
             addresses.append(address)
-            values.append(self.monitor.mem_get(address, 1)[0])
+            values.append(value)
+            visual_blank.append(self.char_code_is_visually_blank(value))
         return {
             "row": row,
             "col": col,
             "values": values,
             "addresses": addresses,
+            "visual_blank": visual_blank,
         }
 
     def slot_visual_y(self, sample, slot_index: int) -> int:
@@ -858,6 +876,7 @@ class Playtester:
 
         required_symbols = {
             "SCREEN_RAM",
+            "CHARSET_RAM",
             "FORMATION_CHAR_BAND_ORIGIN_COL",
             "FORMATION_CHAR_BAND_TOP_ROW",
             "FORMATION_CHAR_BAND_MID_ROW",
@@ -895,7 +914,7 @@ class Playtester:
                                 "value": probe_value,
                             }
                         )
-                        if probe_value != 0x20:
+                        if not self.char_code_is_visually_blank(probe_value):
                             value = probe_value
                 sampled_slots.append(
                     {
@@ -953,7 +972,7 @@ class Playtester:
                     "cells": cells,
                 }
             )
-            if all(value == 0x20 for value in cells["values"]):
+            if all(cells["visual_blank"]):
                 return cells
             if attempt < 3:
                 self.resume_for(0.05)
@@ -1345,7 +1364,7 @@ class Playtester:
         cells = self.formation_char_cells(sample, dive_slot)
         dive_sprite_slot = self.symbols.get("DIVE_VIC_SPRITE_SLOT", 0)
         sprite_enabled = self.sprite_slot_enabled(sample, dive_sprite_slot)
-        char_blank = all(value == 0x20 for value in cells["values"])
+        char_blank = all(cells["visual_blank"])
         return {
             "sample": sample,
             "dive_slot": dive_slot,
@@ -1632,6 +1651,12 @@ class Playtester:
             ):
                 launch = initial_sample
             else:
+                if attempt > 1:
+                    self.arm_enemy_attacks()
+                else:
+                    current_state = self.read_state(include_joystick=False)
+                    if not current_state.get("enemy_attack_active"):
+                        self.arm_enemy_attacks()
                 launch = self.wait_for_active_dive(
                     f"{name}-launch-{attempt}",
                     max_samples=30,
@@ -1929,6 +1954,9 @@ class Playtester:
         self.launch_vice()
         ready_state = self.wait_for_game_ready()
         self.record_step("game_ready", "passed", ready_state)
+        if "player_lives" in self.symbols:
+            # Give the scripted run headroom for movement-only tuning changes.
+            self.monitor.mem_set(self.symbols["player_lives"], bytes([9]))
 
         initial = self.capture_sample("boot")
         self.assert_true(
