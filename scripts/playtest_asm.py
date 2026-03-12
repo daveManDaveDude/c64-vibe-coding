@@ -625,6 +625,10 @@ class Playtester:
         formation_char_render_mask = None
         if "formation_char_render_mask" in self.symbols:
             formation_char_render_mask = self.monitor.mem_get(self.symbols["formation_char_render_mask"], 1)[0]
+            if "formation_char_render_mask_hi" in self.symbols:
+                formation_char_render_mask |= (
+                    self.monitor.mem_get(self.symbols["formation_char_render_mask_hi"], 1)[0] << 8
+                )
         formation_shift_phase = None
         if "formation_shift_phase" in self.symbols:
             formation_shift_phase = self.monitor.mem_get(self.symbols["formation_shift_phase"], 1)[0]
@@ -771,10 +775,24 @@ class Playtester:
                 return latest
         raise PlaytestFailure(f"Timed out waiting for the game shell to appear: {latest}")
 
+    def formation_top_slot_count(self) -> int:
+        return self.symbols.get("FORMATION_TOP_SLOT_COUNT", 2)
+
+    def formation_mid_slot_count(self) -> int:
+        return self.symbols.get("FORMATION_MID_SLOT_COUNT", 2)
+
+    def formation_mid_slot_end(self) -> int:
+        return self.formation_top_slot_count() + self.formation_mid_slot_count()
+
+    def preferred_bottom_target_slot(self) -> int:
+        bottom_start = self.formation_mid_slot_end()
+        bottom_count = max(self.formation_slot_count - bottom_start, 1)
+        return min(bottom_start + max(bottom_count - 2, 0), self.formation_slot_count - 1)
+
     def formation_char_row(self, slot_index: int) -> int:
-        if slot_index < 2:
+        if slot_index < self.formation_top_slot_count():
             return self.symbols["FORMATION_CHAR_BAND_TOP_ROW"]
-        if slot_index < 4:
+        if slot_index < self.formation_mid_slot_end():
             return self.symbols["FORMATION_CHAR_BAND_MID_ROW"]
         return self.symbols["FORMATION_CHAR_BAND_BOTTOM_ROW"]
 
@@ -848,9 +866,9 @@ class Playtester:
             "FORMATION_CHAR_BOTTOM_Y",
             playfield_top_y + (self.symbols.get("FORMATION_CHAR_BAND_BOTTOM_ROW", 0) * 8) - trim_top_rows,
         )
-        if slot_index < 2:
+        if slot_index < self.formation_top_slot_count():
             return top_y
-        if slot_index < 4:
+        if slot_index < self.formation_mid_slot_end():
             return mid_y
         return bottom_y
 
@@ -1090,9 +1108,9 @@ class Playtester:
         raise PlaytestFailure(f"{name}_timeout: {attempts}")
 
     def expected_score_award(self, slot_index: int) -> int:
-        if slot_index < 2:
+        if slot_index < self.formation_top_slot_count():
             return 80
-        if slot_index < 4:
+        if slot_index < self.formation_mid_slot_end():
             return 50
         return 30
 
@@ -1502,8 +1520,10 @@ class Playtester:
             return 0.09
         return 0.05
 
-    def align_player_with_formation_slot(self, preferred_index: int = 5):
+    def align_player_with_formation_slot(self, preferred_index: Optional[int] = None):
         self.logger.log("Aligning the player ship under a live formation slot before firing")
+        if preferred_index is None:
+            preferred_index = self.preferred_bottom_target_slot()
         last_detail = None
         for _ in range(20):
             current = self.capture_sample("align-check", include_joystick=False)
@@ -1773,7 +1793,9 @@ class Playtester:
         initial_alive_count = self.total_formation_alive_count(baseline_state)
         initial_score_total = baseline_state.get("score_total")
         for attempt in range(1, 5):
-            alignment = self.align_player_with_formation_slot(preferred_index=5)
+            alignment = self.align_player_with_formation_slot(
+                preferred_index=self.preferred_bottom_target_slot()
+            )
             launch = self.fire_once(attempt)
             attempt_detail = {
                 "attempt": attempt,

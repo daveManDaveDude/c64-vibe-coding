@@ -77,7 +77,7 @@ BasicUpstart2(start)
 .label GRUNT_DIVE_COLOR = $0b
 .label HIT_FLASH_COLOR = $01
 .label BORDER_BASE_COLOR = $06
-.label FORMATION_START_X_LO = $3d
+.label FORMATION_START_X_LO = $2e
 .label FORMATION_START_X_HI = $00
 .label FORMATION_TOP_Y = 68
 .label FORMATION_MID_Y = 92
@@ -96,17 +96,25 @@ BasicUpstart2(start)
 .label FORMATION_CHAR_MAX_X_LO = $24
 .label FORMATION_CHAR_MAX_X_HI = $01
 .label FORMATION_RIGHT_BOUNCE_ALLOWANCE = 28
-.label FORMATION_SLOT_COUNT = 8
-.label FORMATION_DIVE_CANDIDATE_COUNT = FORMATION_SLOT_COUNT
+.label FORMATION_TOP_SLOT_COUNT = 3
+.label FORMATION_MID_SLOT_COUNT = 3
+.label FORMATION_BOTTOM_SLOT_COUNT = 5
+.label FORMATION_SLOT_COUNT = FORMATION_TOP_SLOT_COUNT + FORMATION_MID_SLOT_COUNT + FORMATION_BOTTOM_SLOT_COUNT
+.label FORMATION_TOP_SLOT_END = FORMATION_TOP_SLOT_COUNT
+.label FORMATION_MID_SLOT_END = FORMATION_TOP_SLOT_COUNT + FORMATION_MID_SLOT_COUNT
+.label FORMATION_DIVE_CANDIDATE_COUNT = 8
 .label FORMATION_SLOT_X_STRIDE = 2
 .label FORMATION_SLOT0_OFFSET = 30
 .label FORMATION_SLOT1_OFFSET = 60
-.label FORMATION_SLOT2_OFFSET = 30
-.label FORMATION_SLOT3_OFFSET = 60
-.label FORMATION_SLOT4_OFFSET = 30
-.label FORMATION_SLOT5_OFFSET = 60
+.label FORMATION_SLOT2_OFFSET = 90
+.label FORMATION_SLOT3_OFFSET = 30
+.label FORMATION_SLOT4_OFFSET = 60
+.label FORMATION_SLOT5_OFFSET = 90
 .label FORMATION_SLOT6_OFFSET = 0
-.label FORMATION_SLOT7_OFFSET = 90
+.label FORMATION_SLOT7_OFFSET = 30
+.label FORMATION_SLOT8_OFFSET = 60
+.label FORMATION_SLOT9_OFFSET = 90
+.label FORMATION_SLOT10_OFFSET = 120
 .label FORMATION_COLUMN_LEFT_MASK = %00000001
 .label FORMATION_COLUMN_RIGHT_MASK = %00000010
 .label FORMATION_CHAR_RIGHT_ONLY_MIN_X = ((FORMATION_CHAR_MIN_X_HI << 8) | FORMATION_CHAR_MIN_X_LO) - FORMATION_SLOT1_OFFSET
@@ -574,7 +582,9 @@ init_formation_renderer:
   jsr clear_formation_char_glyphs
   lda #$00
   sta formation_char_render_mask_pending
+  sta formation_char_render_mask_pending_hi
   sta formation_char_render_mask
+  sta formation_char_render_mask_hi
   ldx #$00
 init_formation_renderer_slot_loop:
   sta formation_char_last_col, x
@@ -2586,11 +2596,16 @@ render_formation:
   sta formation_render_scroll_phase
   lda #$00
   sta formation_char_render_mask_pending
+  sta formation_char_render_mask_pending_hi
   ldx #$00
 render_formation_clear_previous_loop:
   lda formation_char_render_mask
   and formation_char_render_bit_table, x
+  bne render_formation_clear_previous
+  lda formation_char_render_mask_hi
+  and formation_char_render_bit_hi_table, x
   beq render_formation_clear_previous_next
+render_formation_clear_previous:
   jsr clear_formation_char_slot_saved
 render_formation_clear_previous_next:
   inx
@@ -2604,6 +2619,8 @@ render_formation_slot_state_loop:
   bcc render_formation_slot_state_loop
   lda formation_char_render_mask_pending
   sta formation_char_render_mask
+  lda formation_char_render_mask_pending_hi
+  sta formation_char_render_mask_hi
   rts
 
 render_formation_char_slot_state:
@@ -2644,6 +2661,9 @@ draw_formation_char_slot:
   lda formation_char_render_mask_pending
   ora formation_char_render_bit_table, x
   sta formation_char_render_mask_pending
+  lda formation_char_render_mask_pending_hi
+  ora formation_char_render_bit_hi_table, x
+  sta formation_char_render_mask_pending_hi
   rts
 
 draw_formation_char_slot_common:
@@ -2922,7 +2942,7 @@ formation_bound_max_hi:
 formation_live_min_offset:
   .byte FORMATION_SLOT6_OFFSET
 formation_live_max_offset:
-  .byte FORMATION_SLOT7_OFFSET
+  .byte FORMATION_SLOT10_OFFSET
 formation_slot0_x_lo:
   .byte FORMATION_START_X_LO + FORMATION_SLOT0_OFFSET
 formation_slot0_x_hi:
@@ -2955,6 +2975,18 @@ formation_slot7_x_lo:
   .byte FORMATION_START_X_LO + FORMATION_SLOT7_OFFSET
 formation_slot7_x_hi:
   .byte FORMATION_START_X_HI
+formation_slot8_x_lo:
+  .byte FORMATION_START_X_LO + FORMATION_SLOT8_OFFSET
+formation_slot8_x_hi:
+  .byte FORMATION_START_X_HI
+formation_slot9_x_lo:
+  .byte FORMATION_START_X_LO + FORMATION_SLOT9_OFFSET
+formation_slot9_x_hi:
+  .byte FORMATION_START_X_HI
+formation_slot10_x_lo:
+  .byte FORMATION_START_X_LO + FORMATION_SLOT10_OFFSET
+formation_slot10_x_hi:
+  .byte FORMATION_START_X_HI
 formation_slot0_alive:
   .byte $01
 formation_slot1_alive:
@@ -2970,6 +3002,12 @@ formation_slot5_alive:
 formation_slot6_alive:
   .byte $01
 formation_slot7_alive:
+  .byte $01
+formation_slot8_alive:
+  .byte $01
+formation_slot9_alive:
+  .byte $01
+formation_slot10_alive:
   .byte $01
 slot_explosion_timer:
   .fill FORMATION_SLOT_COUNT, $00
@@ -3169,7 +3207,11 @@ formation_char_last_clear_count:
   .fill FORMATION_SLOT_COUNT, $00
 formation_char_render_mask_pending:
   .byte $00
+formation_char_render_mask_pending_hi:
+  .byte $00
 formation_char_render_mask:
+  .byte $00
+formation_char_render_mask_hi:
   .byte $00
 enemy_explosion_pointer:
   .byte $00
@@ -3226,35 +3268,39 @@ enemy_explosion_sequence:
 formation_char_band_rows:
   .byte FORMATION_CHAR_BAND_TOP_ROW,FORMATION_CHAR_BAND_TOP_ROW + 1,FORMATION_CHAR_BAND_MID_ROW,FORMATION_CHAR_BAND_MID_ROW + 1,FORMATION_CHAR_BAND_BOTTOM_ROW
 formation_char_row_table:
-  .byte FORMATION_CHAR_BAND_TOP_ROW,FORMATION_CHAR_BAND_TOP_ROW,FORMATION_CHAR_BAND_MID_ROW,FORMATION_CHAR_BAND_MID_ROW,FORMATION_CHAR_BAND_BOTTOM_ROW,FORMATION_CHAR_BAND_BOTTOM_ROW,FORMATION_CHAR_BAND_BOTTOM_ROW,FORMATION_CHAR_BAND_BOTTOM_ROW
+  .byte FORMATION_CHAR_BAND_TOP_ROW,FORMATION_CHAR_BAND_TOP_ROW,FORMATION_CHAR_BAND_TOP_ROW,FORMATION_CHAR_BAND_MID_ROW,FORMATION_CHAR_BAND_MID_ROW,FORMATION_CHAR_BAND_MID_ROW,FORMATION_CHAR_BAND_BOTTOM_ROW,FORMATION_CHAR_BAND_BOTTOM_ROW,FORMATION_CHAR_BAND_BOTTOM_ROW,FORMATION_CHAR_BAND_BOTTOM_ROW,FORMATION_CHAR_BAND_BOTTOM_ROW
 formation_slot_visual_y_table:
-  .byte FORMATION_CHAR_TOP_Y,FORMATION_CHAR_TOP_Y,FORMATION_CHAR_MID_Y,FORMATION_CHAR_MID_Y,FORMATION_CHAR_BOTTOM_Y,FORMATION_CHAR_BOTTOM_Y,FORMATION_CHAR_BOTTOM_Y,FORMATION_CHAR_BOTTOM_Y
+  .byte FORMATION_CHAR_TOP_Y,FORMATION_CHAR_TOP_Y,FORMATION_CHAR_TOP_Y,FORMATION_CHAR_MID_Y,FORMATION_CHAR_MID_Y,FORMATION_CHAR_MID_Y,FORMATION_CHAR_BOTTOM_Y,FORMATION_CHAR_BOTTOM_Y,FORMATION_CHAR_BOTTOM_Y,FORMATION_CHAR_BOTTOM_Y,FORMATION_CHAR_BOTTOM_Y
 formation_slot_offset_table:
-  .byte FORMATION_SLOT0_OFFSET,FORMATION_SLOT1_OFFSET,FORMATION_SLOT2_OFFSET,FORMATION_SLOT3_OFFSET,FORMATION_SLOT4_OFFSET,FORMATION_SLOT5_OFFSET,FORMATION_SLOT6_OFFSET,FORMATION_SLOT7_OFFSET
+  .byte FORMATION_SLOT0_OFFSET,FORMATION_SLOT1_OFFSET,FORMATION_SLOT2_OFFSET,FORMATION_SLOT3_OFFSET,FORMATION_SLOT4_OFFSET,FORMATION_SLOT5_OFFSET,FORMATION_SLOT6_OFFSET,FORMATION_SLOT7_OFFSET,FORMATION_SLOT8_OFFSET,FORMATION_SLOT9_OFFSET,FORMATION_SLOT10_OFFSET
 formation_slot_column_bit_table:
-  .byte FORMATION_COLUMN_LEFT_MASK,FORMATION_COLUMN_RIGHT_MASK,FORMATION_COLUMN_LEFT_MASK,FORMATION_COLUMN_RIGHT_MASK,FORMATION_COLUMN_LEFT_MASK,FORMATION_COLUMN_RIGHT_MASK,FORMATION_COLUMN_LEFT_MASK,FORMATION_COLUMN_RIGHT_MASK
+  .byte FORMATION_COLUMN_LEFT_MASK,FORMATION_COLUMN_RIGHT_MASK,FORMATION_COLUMN_RIGHT_MASK,FORMATION_COLUMN_LEFT_MASK,FORMATION_COLUMN_RIGHT_MASK,FORMATION_COLUMN_RIGHT_MASK,FORMATION_COLUMN_LEFT_MASK,FORMATION_COLUMN_LEFT_MASK,FORMATION_COLUMN_RIGHT_MASK,FORMATION_COLUMN_RIGHT_MASK,FORMATION_COLUMN_RIGHT_MASK
 formation_launch_order_left_first:
-  .byte $04,$02,$00,$06,$05,$03,$01,$07
+  .byte $07,$03,$00,$06,$09,$05,$02,$10
 formation_launch_order_right_first:
-  .byte $05,$03,$01,$07,$04,$02,$00,$06
+  .byte $09,$05,$02,$10,$07,$03,$00,$06
 formation_slot_dive_direction_table:
-  .byte DIVE_DIRECTION_LEFT,DIVE_DIRECTION_RIGHT,DIVE_DIRECTION_LEFT,DIVE_DIRECTION_RIGHT,DIVE_DIRECTION_LEFT,DIVE_DIRECTION_RIGHT,DIVE_DIRECTION_LEFT,DIVE_DIRECTION_RIGHT
+  .byte DIVE_DIRECTION_LEFT,DIVE_DIRECTION_RIGHT,DIVE_DIRECTION_RIGHT,DIVE_DIRECTION_LEFT,DIVE_DIRECTION_RIGHT,DIVE_DIRECTION_RIGHT,DIVE_DIRECTION_LEFT,DIVE_DIRECTION_LEFT,DIVE_DIRECTION_RIGHT,DIVE_DIRECTION_RIGHT,DIVE_DIRECTION_RIGHT
 formation_char_render_bit_table:
-  .byte %00000001,%00000010,%00000100,%00001000,%00010000,%00100000,%01000000,%10000000
+  .byte %00000001,%00000010,%00000100,%00001000,%00010000,%00100000,%01000000,%10000000,$00,$00,$00
+formation_char_render_bit_hi_table:
+  .byte $00,$00,$00,$00,$00,$00,$00,$00,%00000001,%00000010,%00000100
 formation_char_clear_bit_table:
-  .byte %11111110,%11111101,%11111011,%11110111,%11101111,%11011111,%10111111,%01111111
+  .byte %11111110,%11111101,%11111011,%11110111,%11101111,%11011111,%10111111,%01111111,$ff,$ff,$ff
+formation_char_clear_bit_hi_table:
+  .byte $ff,$ff,$ff,$ff,$ff,$ff,$ff,$ff,%11111110,%11111101,%11111011
 formation_char_color_table:
-  .byte FLAGSHIP_COLOR,FLAGSHIP_COLOR,ESCORT_COLOR,ESCORT_COLOR,GRUNT_COLOR,GRUNT_COLOR,GRUNT_COLOR,GRUNT_COLOR
+  .byte FLAGSHIP_COLOR,FLAGSHIP_COLOR,FLAGSHIP_COLOR,ESCORT_COLOR,ESCORT_COLOR,ESCORT_COLOR,GRUNT_COLOR,GRUNT_COLOR,GRUNT_COLOR,GRUNT_COLOR,GRUNT_COLOR
 formation_slot_char_frame_base_table:
-  .byte $00,$00,$02,$02,$04,$04,$04,$04
+  .byte $00,$00,$00,$02,$02,$02,$04,$04,$04,$04,$04
 formation_anim_frame_offset_table:
   .byte $00,$01,$00,$01
 formation_slot_score_lo_table:
-  .byte SCORE_FLAGSHIP_LO,SCORE_FLAGSHIP_LO,SCORE_ESCORT_LO,SCORE_ESCORT_LO,SCORE_GRUNT_LO,SCORE_GRUNT_LO,SCORE_GRUNT_LO,SCORE_GRUNT_LO
+  .byte SCORE_FLAGSHIP_LO,SCORE_FLAGSHIP_LO,SCORE_FLAGSHIP_LO,SCORE_ESCORT_LO,SCORE_ESCORT_LO,SCORE_ESCORT_LO,SCORE_GRUNT_LO,SCORE_GRUNT_LO,SCORE_GRUNT_LO,SCORE_GRUNT_LO,SCORE_GRUNT_LO
 formation_slot_score_mid_table:
-  .byte SCORE_FLAGSHIP_MID,SCORE_FLAGSHIP_MID,SCORE_ESCORT_MID,SCORE_ESCORT_MID,SCORE_GRUNT_MID,SCORE_GRUNT_MID,SCORE_GRUNT_MID,SCORE_GRUNT_MID
+  .byte SCORE_FLAGSHIP_MID,SCORE_FLAGSHIP_MID,SCORE_FLAGSHIP_MID,SCORE_ESCORT_MID,SCORE_ESCORT_MID,SCORE_ESCORT_MID,SCORE_GRUNT_MID,SCORE_GRUNT_MID,SCORE_GRUNT_MID,SCORE_GRUNT_MID,SCORE_GRUNT_MID
 formation_slot_score_hi_table:
-  .byte SCORE_FLAGSHIP_HI,SCORE_FLAGSHIP_HI,SCORE_ESCORT_HI,SCORE_ESCORT_HI,SCORE_GRUNT_HI,SCORE_GRUNT_HI,SCORE_GRUNT_HI,SCORE_GRUNT_HI
+  .byte SCORE_FLAGSHIP_HI,SCORE_FLAGSHIP_HI,SCORE_FLAGSHIP_HI,SCORE_ESCORT_HI,SCORE_ESCORT_HI,SCORE_ESCORT_HI,SCORE_GRUNT_HI,SCORE_GRUNT_HI,SCORE_GRUNT_HI,SCORE_GRUNT_HI,SCORE_GRUNT_HI
 player_explosion_top_left_sequence:
   .byte PLAYER_EXPLOSION_PTR_BASE + 0,PLAYER_EXPLOSION_PTR_BASE + 4,PLAYER_EXPLOSION_PTR_BASE + 8,PLAYER_EXPLOSION_PTR_BASE + 12
 player_explosion_top_right_sequence:
@@ -3300,9 +3346,15 @@ clear_dive_slot_char_handoff:
   lda formation_char_render_mask
   and formation_char_clear_bit_table, x
   sta formation_char_render_mask
+  lda formation_char_render_mask_hi
+  and formation_char_clear_bit_hi_table, x
+  sta formation_char_render_mask_hi
   lda formation_char_render_mask_pending
   and formation_char_clear_bit_table, x
   sta formation_char_render_mask_pending
+  lda formation_char_render_mask_pending_hi
+  and formation_char_clear_bit_hi_table, x
+  sta formation_char_render_mask_pending_hi
   rts
 
 draw_player_extra_layers_char:

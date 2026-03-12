@@ -95,26 +95,34 @@ def formation_slot_count(sample: dict, symbols: dict) -> int:
     return sample.get("formation_slot_count", symbols.get("FORMATION_SLOT_COUNT", 6))
 
 
+def formation_top_slot_count(symbols: dict) -> int:
+    return symbols.get("FORMATION_TOP_SLOT_COUNT", 2)
+
+
+def formation_mid_slot_end(symbols: dict) -> int:
+    return formation_top_slot_count(symbols) + symbols.get("FORMATION_MID_SLOT_COUNT", 2)
+
+
 def formation_slot_row(symbols: dict, slot_index: int) -> int:
-    if slot_index < 2:
+    if slot_index < formation_top_slot_count(symbols):
         return symbols["FORMATION_CHAR_BAND_TOP_ROW"]
-    if slot_index < 4:
+    if slot_index < formation_mid_slot_end(symbols):
         return symbols["FORMATION_CHAR_BAND_MID_ROW"]
     return symbols["FORMATION_CHAR_BAND_BOTTOM_ROW"]
 
 
 def formation_slot_color(symbols: dict, slot_index: int) -> int:
-    if slot_index < 2:
+    if slot_index < formation_top_slot_count(symbols):
         return symbols["FLAGSHIP_COLOR"]
-    if slot_index < 4:
+    if slot_index < formation_mid_slot_end(symbols):
         return symbols["ESCORT_COLOR"]
     return symbols["GRUNT_COLOR"]
 
 
-def formation_slot_frame_base(slot_index: int) -> int:
-    if slot_index < 2:
+def formation_slot_frame_base(symbols: dict, slot_index: int) -> int:
+    if slot_index < formation_top_slot_count(symbols):
         return 0
-    if slot_index < 4:
+    if slot_index < formation_mid_slot_end(symbols):
         return 2
     return 4
 
@@ -142,7 +150,7 @@ def draw_formation_slot(
     shift_phase = char_relative_x & 0x07
     animation_shift = symbols["FORMATION_ANIMATION_SHIFT"]
     anim_index = (sample["formation_frame_value"] >> animation_shift) & 0x03
-    formation_char_value = formation_slot_frame_base(slot_index) + FORMATION_ANIMATION_SEQUENCE[anim_index]
+    formation_char_value = formation_slot_frame_base(symbols, slot_index) + FORMATION_ANIMATION_SEQUENCE[anim_index]
     frame_offset = (formation_char_value << 8) + (shift_phase << 5)
     glyph_bytes = formation_bitmap_data[frame_offset : frame_offset + 32]
 
