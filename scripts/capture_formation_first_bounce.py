@@ -124,8 +124,10 @@ def draw_formation_slot(
     playfield_left = symbols["PLAYFIELD_LEFT_X_LO"] + (symbols["PLAYFIELD_LEFT_X_HI"] << 8)
     slot_x = sample[f"formation_{slot_index}_x"]
     relative_x = slot_x - playfield_left
-    char_col = relative_x >> 3
-    shift_phase = relative_x & 0x07
+    global_scroll = sample.get("formation_shift_phase") or 0
+    char_relative_x = relative_x - global_scroll
+    char_col = char_relative_x >> 3
+    shift_phase = char_relative_x & 0x07
     animation_shift = symbols["FORMATION_ANIMATION_SHIFT"]
     anim_index = (sample["formation_frame_value"] >> animation_shift) & 0x03
     formation_char_value = FORMATION_ANIMATION_SEQUENCES[slot_index][anim_index]
@@ -136,7 +138,7 @@ def draw_formation_slot(
         if char_col + glyph_index >= symbols["FORMATION_CHAR_BAND_WIDTH"]:
             break
         glyph = glyph_bytes[glyph_index * 8 : (glyph_index + 1) * 8]
-        pixel_x = SCREEN_ORIGIN_X + ((char_col + glyph_index) * 8)
+        pixel_x = SCREEN_ORIGIN_X + global_scroll + ((char_col + glyph_index) * 8)
         pixel_y = SCREEN_ORIGIN_Y + (row * 8)
         for glyph_y in range(8):
             bits = glyph[glyph_y]

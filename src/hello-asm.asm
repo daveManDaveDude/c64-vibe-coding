@@ -89,6 +89,8 @@ BasicUpstart2(start)
 .label FORMATION_CHAR_TOP_Y = FORMATION_CHAR_BAND_TOP_Y - FORMATION_CHAR_TRIM_TOP_ROWS
 .label FORMATION_CHAR_MID_Y = FORMATION_CHAR_BAND_MID_Y - FORMATION_CHAR_TRIM_TOP_ROWS
 .label FORMATION_CHAR_BOTTOM_Y = FORMATION_CHAR_BAND_BOTTOM_Y - FORMATION_CHAR_TRIM_TOP_ROWS
+.label FORMATION_SCROLL_START_RASTER = FORMATION_CHAR_BAND_TOP_Y - 1
+.label FORMATION_SCROLL_END_RASTER = FORMATION_CHAR_BAND_BOTTOM_Y + 8 - 1
 .label FORMATION_CHAR_MIN_X_LO = $1c
 .label FORMATION_CHAR_MIN_X_HI = $00
 .label FORMATION_CHAR_MAX_X_LO = $1e
@@ -212,10 +214,13 @@ BasicUpstart2(start)
 .label ENEMY_EXPLOSION_SPRITE1_PTR = $e0
 .label ENEMY_EXPLOSION_SPRITE2_PTR = $e1
 .label ENEMY_EXPLOSION_SPRITE3_PTR = $e2
+.label VIC_CTRL2_TEXT_MULTICOLOR = $18
 .label PLAYER_TOP_SPLIT_RASTER = 40
 .label PLAYER_BOTTOM_SPLIT_RASTER = 170
 .label RASTER_PHASE_TOP = $00
-.label RASTER_PHASE_BOTTOM = $01
+.label RASTER_PHASE_FORMATION_SCROLL_ON = $01
+.label RASTER_PHASE_FORMATION_SCROLL_OFF = $02
+.label RASTER_PHASE_BOTTOM = $03
 .label GAME_STATE_READY = $00
 .label GAME_STATE_PLAYING = $01
 .label GAME_STATE_PLAYER_HIT = $02
@@ -281,7 +286,7 @@ init_vic:
 
   lda #$1b
   sta VIC_CTRL1
-  lda #$18
+  lda #VIC_CTRL2_TEXT_MULTICOLOR
   sta VIC_CTRL2
   lda #$12
   sta MEMORY_SETUP
@@ -743,21 +748,29 @@ raster_irq:
   sta IRQ_STATUS
   lda raster_phase
   beq raster_irq_top_phase
+  cmp #RASTER_PHASE_FORMATION_SCROLL_ON
+  beq raster_irq_formation_scroll_on_phase
+  cmp #RASTER_PHASE_FORMATION_SCROLL_OFF
+  beq raster_irq_formation_scroll_off_phase
 
   lda #RASTER_PHASE_TOP
   sta raster_phase
   lda #PLAYER_TOP_SPLIT_RASTER
   sta RASTER
+  lda #VIC_CTRL2_TEXT_MULTICOLOR
+  sta VIC_CTRL2
   lda #$01
   sta player_extra_visible
   jsr draw_player_bottom_effects
   jmp raster_irq_done
 
 raster_irq_top_phase:
-  lda #RASTER_PHASE_BOTTOM
+  lda #RASTER_PHASE_FORMATION_SCROLL_ON
   sta raster_phase
-  lda #PLAYER_BOTTOM_SPLIT_RASTER
+  lda #FORMATION_SCROLL_START_RASTER
   sta RASTER
+  lda #VIC_CTRL2_TEXT_MULTICOLOR
+  sta VIC_CTRL2
   lda #FORMATION_MULTI0_COLOR
   sta SPRITE_MULTICOLOR_0
   lda #FORMATION_MULTI1_COLOR
@@ -766,6 +779,26 @@ raster_irq_top_phase:
   sta player_extra_visible
   sta player_bottom_sprite_mask_debug
   jsr render_char_mode_top_sprites
+  jmp raster_irq_done
+
+raster_irq_formation_scroll_on_phase:
+  lda #RASTER_PHASE_FORMATION_SCROLL_OFF
+  sta raster_phase
+  lda #FORMATION_SCROLL_END_RASTER
+  sta RASTER
+  lda formation_render_scroll_phase
+  ora #VIC_CTRL2_TEXT_MULTICOLOR
+  sta VIC_CTRL2
+  jmp raster_irq_done
+
+raster_irq_formation_scroll_off_phase:
+  lda #RASTER_PHASE_BOTTOM
+  sta raster_phase
+  lda #PLAYER_BOTTOM_SPLIT_RASTER
+  sta RASTER
+  lda #VIC_CTRL2_TEXT_MULTICOLOR
+  sta VIC_CTRL2
+  jmp raster_irq_done
 
 raster_irq_done:
   jmp $ea81
@@ -2771,6 +2804,8 @@ store_player_explosion_sprite2_msb_done:
   rts
 
 render_formation:
+  lda formation_shift_phase
+  sta formation_render_scroll_phase
   lda #$00
   sta formation_char_render_mask_pending
   ldx #$00
@@ -3098,6 +3133,14 @@ draw_formation_char_slot_common:
   sta formation_char_relative_hi
 
   lda formation_char_relative_lo
+  sec
+  sbc formation_render_scroll_phase
+  sta formation_char_relative_lo
+  lda formation_char_relative_hi
+  sbc #$00
+  sta formation_char_relative_hi
+
+  lda formation_char_relative_lo
   and #%00000111
   sta formation_char_shift_phase_local
 
@@ -3154,6 +3197,14 @@ clear_formation_char_slot_screen:
   sta formation_char_relative_lo
   lda formation_char_slot_x_hi
   sbc #PLAYFIELD_LEFT_X_HI
+  sta formation_char_relative_hi
+
+  lda formation_char_relative_lo
+  sec
+  sbc formation_render_scroll_phase
+  sta formation_char_relative_lo
+  lda formation_char_relative_hi
+  sbc #$00
   sta formation_char_relative_hi
 
   lsr formation_char_relative_hi
@@ -3431,6 +3482,8 @@ player_bottom_sprite_mask_debug:
 formation_anim_index:
   .byte $00
 formation_shift_phase:
+  .byte $00
+formation_render_scroll_phase:
   .byte $00
 frame_capture_counter:
   .byte $00

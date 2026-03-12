@@ -788,7 +788,9 @@ class Playtester:
 
     def formation_char_col(self, sample, slot_index: int) -> int:
         playfield_left = self.symbols["PLAYFIELD_LEFT_X_LO"] + (self.symbols["PLAYFIELD_LEFT_X_HI"] << 8)
-        return ((sample[f"formation_{slot_index}_x"] - playfield_left) >> 3) + self.symbols[
+        relative_x = sample[f"formation_{slot_index}_x"] - playfield_left
+        shift_phase = sample.get("formation_shift_phase") or 0
+        return ((relative_x - shift_phase) >> 3) + self.symbols[
             "FORMATION_CHAR_BAND_ORIGIN_COL"
         ]
 
