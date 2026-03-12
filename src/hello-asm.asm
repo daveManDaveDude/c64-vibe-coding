@@ -91,6 +91,7 @@ BasicUpstart2(start)
 .label FORMATION_CHAR_BOTTOM_Y = FORMATION_CHAR_BAND_BOTTOM_Y - FORMATION_CHAR_TRIM_TOP_ROWS
 .label FORMATION_SCROLL_START_RASTER = FORMATION_CHAR_BAND_TOP_Y - 1
 .label FORMATION_SCROLL_END_RASTER = FORMATION_CHAR_BAND_BOTTOM_Y + 8 - 1
+.label FORMATION_RENDER_START_RASTER = FORMATION_SCROLL_END_RASTER + 1
 .label FORMATION_CHAR_MIN_X_LO = $1a
 .label FORMATION_CHAR_MIN_X_HI = $00
 .label FORMATION_CHAR_MAX_X_LO = $24
@@ -835,13 +836,13 @@ raster_irq_done:
   jmp $ea81
 
 wait_frame:
-  lda #$ff
-wait_for_line_255:
+  lda #FORMATION_RENDER_START_RASTER
+wait_for_render_start_raster:
   cmp RASTER
-  bne wait_for_line_255
-wait_for_next_frame:
+  bne wait_for_render_start_raster
+wait_for_render_window:
   cmp RASTER
-  beq wait_for_next_frame
+  beq wait_for_render_window
   rts
 
 clear_active_dive_state:
@@ -2353,6 +2354,7 @@ destroy_slot:
   sta formation_slot0_alive, x
   txa
   pha
+  jsr clear_dive_slot_char_handoff
   jsr update_formation_bounds
   jsr update_formation_slot_positions
   pla
@@ -2840,22 +2842,7 @@ clear_formation_char_slot_saved_done:
   rts
 
 update_formation_char_slot_glyphs:
-  txa
-  asl
-  asl
-  clc
-  adc #FORMATION_CHAR_BASE
-  sta formation_char_glyph_base
-
-  txa
-  asl
-  asl
-  asl
-  asl
-  asl
-  sta COLOR_PTR
-  lda #>(CHARSET_RAM + (FORMATION_CHAR_BASE * 8))
-  sta COLOR_PTR + 1
+  jsr load_formation_char_glyph_slot
 
   lda formation_char_value
   clc
@@ -2878,18 +2865,35 @@ update_formation_char_slot_glyphs_loop:
   bcc update_formation_char_slot_glyphs_loop
   rts
 
-clear_formation_char_glyphs:
-  ldy #$00
-clear_formation_char_glyphs_loop:
+// Slot glyphs now span multiple charset pages, so use table-driven
+// addresses instead of relying on wrapped 8-bit offsets.
+load_formation_char_glyph_slot:
+  lda formation_char_glyph_base_table, x
+  sta formation_char_glyph_base
+  lda formation_char_glyph_addr_lo_table, x
+  sta COLOR_PTR
+  lda formation_char_glyph_addr_hi_table, x
+  sta COLOR_PTR + 1
+  rts
+
+clear_formation_char_slot_glyphs:
+  jsr load_formation_char_glyph_slot
   lda #$00
-  sta CHARSET_RAM + (FORMATION_CHAR_BASE * 8), y
+  ldy #$00
+clear_formation_char_slot_glyphs_loop:
+  sta (COLOR_PTR), y
   iny
-  .if ((FORMATION_CHAR_SLOT_STRIDE * FORMATION_SLOT_COUNT * 8) == 256) {
-    bne clear_formation_char_glyphs_loop
-  } else {
-    cpy #(FORMATION_CHAR_SLOT_STRIDE * FORMATION_SLOT_COUNT * 8)
-    bcc clear_formation_char_glyphs_loop
-  }
+  cpy #$20
+  bcc clear_formation_char_slot_glyphs_loop
+  rts
+
+clear_formation_char_glyphs:
+  ldx #$00
+clear_formation_char_glyphs_loop:
+  jsr clear_formation_char_slot_glyphs
+  inx
+  cpx #FORMATION_SLOT_COUNT
+  bcc clear_formation_char_glyphs_loop
   rts
 
 clear_formation_char_band:
@@ -3289,6 +3293,12 @@ formation_char_clear_bit_table:
   .byte %11111110,%11111101,%11111011,%11110111,%11101111,%11011111,%10111111,%01111111,$ff,$ff,$ff
 formation_char_clear_bit_hi_table:
   .byte $ff,$ff,$ff,$ff,$ff,$ff,$ff,$ff,%11111110,%11111101,%11111011
+formation_char_glyph_base_table:
+  .fill FORMATION_SLOT_COUNT, FORMATION_CHAR_BASE + (i * FORMATION_CHAR_SLOT_STRIDE)
+formation_char_glyph_addr_lo_table:
+  .fill FORMATION_SLOT_COUNT, <(CHARSET_RAM + ((FORMATION_CHAR_BASE + (i * FORMATION_CHAR_SLOT_STRIDE)) * 8))
+formation_char_glyph_addr_hi_table:
+  .fill FORMATION_SLOT_COUNT, >(CHARSET_RAM + ((FORMATION_CHAR_BASE + (i * FORMATION_CHAR_SLOT_STRIDE)) * 8))
 formation_char_color_table:
   .byte FLAGSHIP_COLOR,FLAGSHIP_COLOR,FLAGSHIP_COLOR,ESCORT_COLOR,ESCORT_COLOR,ESCORT_COLOR,GRUNT_COLOR,GRUNT_COLOR,GRUNT_COLOR,GRUNT_COLOR,GRUNT_COLOR
 formation_slot_char_frame_base_table:
@@ -3334,7 +3344,7 @@ color_row_hi:
     .byte >(COLOR_RAM + (row * 40))
   }
 
-* = $5000 "Char Mode Sprite Routines"
+* = $5040 "Char Mode Sprite Routines"
 
 load_slot_visual_y:
   lda formation_slot_visual_y_table, x

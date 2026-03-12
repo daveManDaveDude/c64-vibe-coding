@@ -635,6 +635,9 @@ class Playtester:
         enemy_attack_active = None
         if "enemy_attack_active" in self.symbols:
             enemy_attack_active = self.monitor.mem_get(self.symbols["enemy_attack_active"], 1)[0] != 0
+        frame_capture_ready = None
+        if "frame_capture_ready" in self.symbols:
+            frame_capture_ready = self.monitor.mem_get(self.symbols["frame_capture_ready"], 1)[0]
         score_total_data = None
         if "score_total_lo" in self.symbols:
             score_total_data = self.monitor.mem_get(self.symbols["score_total_lo"], 3)
@@ -694,6 +697,7 @@ class Playtester:
             "formation_char_render_mask": formation_char_render_mask,
             "formation_shift_phase": formation_shift_phase,
             "enemy_attack_active": enemy_attack_active,
+            "frame_capture_ready": frame_capture_ready,
             "score_total": (
                 score_bytes_to_int(
                     score_total_data[0],
@@ -758,6 +762,18 @@ class Playtester:
         self.sample_counter += 1
         self.samples.append(sample)
         return sample
+
+    def wait_for_render_complete(self, sample=None):
+        if "frame_capture_ready" not in self.symbols:
+            return sample if sample is not None else self.read_state(include_joystick=False)
+
+        latest = sample if sample is not None else self.read_state(include_joystick=False)
+        for _ in range(8):
+            if latest.get("frame_capture_ready") == 1:
+                return latest
+            self.resume_for(0.01)
+            latest = self.read_state(include_joystick=False)
+        return latest
 
     def wait_for_game_ready(self):
         latest = None
@@ -873,6 +889,7 @@ class Playtester:
         return bottom_y
 
     def assert_char_renderer_output(self, name: str, sample):
+        sample = self.wait_for_render_complete(sample)
         if sample.get("formation_char_render_mask") is not None:
             expected_mask = 0
             for slot in self.live_formation_slots(sample):
@@ -904,6 +921,7 @@ class Playtester:
         attempts = []
         latest_sample = sample
         for attempt in range(4):
+            latest_sample = self.wait_for_render_complete(latest_sample)
             sampled_slots = []
             for slot in self.live_formation_slots(latest_sample):
                 row = self.formation_char_row(slot["index"])
@@ -978,21 +996,47 @@ class Playtester:
         attempts = []
         latest_sample = sample
         for attempt in range(4):
+            latest_sample = self.wait_for_render_complete(latest_sample)
             cells = self.formation_char_cells(latest_sample, slot_index)
+            required_blank = self.required_gap_blank_cells(latest_sample, slot_index)
             attempts.append(
                 {
                     "sample": latest_sample,
                     "slot": slot_index,
                     "cells": cells,
+                    "required_blank": required_blank,
                 }
             )
-            if all(cells["visual_blank"]):
+            if all(
+                (not must_be_blank) or is_blank
+                for must_be_blank, is_blank in zip(required_blank, cells["visual_blank"])
+            ):
                 return cells
             if attempt < 3:
                 self.resume_for(0.05)
                 latest_sample = self.read_state(include_joystick=False)
 
         self.assert_true(name, False, {"attempts": attempts})
+
+    def required_gap_blank_cells(self, sample, slot_index: int) -> list[bool]:
+        slot_row = self.formation_char_row(slot_index)
+        slot_x = sample[f"formation_{slot_index}_x"]
+        required_blank = [True, True, True, True]
+        for slot in self.live_formation_slots(sample):
+            if slot["index"] == slot_index:
+                continue
+            if self.formation_char_row(slot["index"]) != slot_row:
+                continue
+            delta_x = slot["x"] - slot_x
+            if 0 < delta_x < 32:
+                overlap_cells = max(1, ((32 - delta_x) + 7) // 8)
+                for offset in range(4 - overlap_cells, 4):
+                    required_blank[offset] = False
+            elif -32 < delta_x < 0:
+                overlap_cells = max(1, ((32 + delta_x) + 7) // 8)
+                for offset in range(overlap_cells):
+                    required_blank[offset] = False
+        return required_blank
 
     def capture_shot_active_slots(self, name: str, launch_sample):
         sample = self.wait_for_sample_matching(
@@ -1352,6 +1396,7 @@ class Playtester:
         raise PlaytestFailure(f"{name}_timeout: {attempts}")
 
     def capture_dive_renderer_state(self, sample, dive_slot: int):
+        sample = self.wait_for_render_complete(sample)
         cells = self.formation_char_cells(sample, dive_slot)
         dive_sprite_slot = self.symbols.get("DIVE_VIC_SPRITE_SLOT", 0)
         sprite_enabled = self.sprite_slot_enabled(sample, dive_sprite_slot)
