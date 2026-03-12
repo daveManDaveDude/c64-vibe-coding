@@ -11,13 +11,24 @@ if [ "$#" -gt 0 ]; then
   shift
 fi
 
-EXTRA_ARGS=("$@")
+EXTRA_ARGS=()
+FORMATION_RENDERER_MODE="${FORMATION_RENDERER:-char}"
 
-if [ "${FORMATION_RENDERER:-sprite}" = "char" ]; then
-  EXTRA_ARGS=("-define" "FORMATION_CHAR_RENDERER")
-  if [ "$#" -gt 0 ]; then
-    EXTRA_ARGS+=("$@")
-  fi
+case "$FORMATION_RENDERER_MODE" in
+  char)
+    EXTRA_ARGS+=("-define" "FORMATION_CHAR_RENDERER")
+    ;;
+  sprite)
+    ;;
+  *)
+    echo "Unsupported FORMATION_RENDERER value: $FORMATION_RENDERER_MODE" >&2
+    echo "Expected one of: char, sprite" >&2
+    exit 2
+    ;;
+esac
+
+if [ "$#" -gt 0 ]; then
+  EXTRA_ARGS+=("$@")
 fi
 
 SPRITE_PNG="ArcadeGalaxianSprites.png"

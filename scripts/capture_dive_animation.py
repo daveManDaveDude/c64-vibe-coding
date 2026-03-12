@@ -16,7 +16,6 @@ SPRITE0_X = 0xD000
 SPRITE0_Y = 0xD001
 SPRITE1_Y = 0xD003
 SPRITE_ENABLE = 0xD015
-INITIAL_EXPECTED_SPRITES = 0xFB
 
 
 def connect_monitor() -> BinaryMonitor:
@@ -43,7 +42,13 @@ def combine_x(low: int, high: int) -> int:
     return low | (high << 8)
 
 
-def wait_for_game_ready(monitor: BinaryMonitor, timeout_seconds: float) -> None:
+def logical_alive_count(monitor: BinaryMonitor, symbols: dict[str, int], sprite_enable: int) -> int:
+    if "formation_slot0_alive" in symbols:
+        return sum(1 for value in monitor.mem_get(symbols["formation_slot0_alive"], 6) if value != 0)
+    return sum(1 for mask in (0x01, 0x08, 0x10, 0x20, 0x40, 0x80) if sprite_enable & mask)
+
+
+def wait_for_game_ready(monitor: BinaryMonitor, symbols: dict[str, int], timeout_seconds: float) -> None:
     deadline = time.time() + timeout_seconds
 
     while time.time() < deadline:
@@ -56,7 +61,8 @@ def wait_for_game_ready(monitor: BinaryMonitor, timeout_seconds: float) -> None:
         player_y = vic_data[SPRITE1_Y - SPRITE0_X]
 
         if (
-            sprite_enable & INITIAL_EXPECTED_SPRITES == INITIAL_EXPECTED_SPRITES
+            (sprite_enable & 0x02) != 0
+            and logical_alive_count(monitor, symbols, sprite_enable) >= 1
             and player_y > formation_y
             and player_y >= 180
             and formation_y <= 100
@@ -246,7 +252,7 @@ def main() -> int:
     try:
         vice_process = launch_vice(args)
         monitor = connect_monitor()
-        wait_for_game_ready(monitor, timeout_seconds=5.0)
+        wait_for_game_ready(monitor, symbols, timeout_seconds=5.0)
 
         if args.mode == "moving":
             result["capture"] = wait_for_moving_capture(monitor, symbols, args.timeout)

@@ -52,6 +52,7 @@ FIRE_MASK = 0x10
 SHOT_SPRITE_MASK = 0x04
 INITIAL_FORMATION_ALIVE_COUNT = 6
 FORMATION_RENDERER_SPRITE = 0
+FORMATION_RENDERER_CHAR = 1
 FORMATION_RENDERER_NAMES = {
     0: "sprite",
     1: "char",
@@ -188,6 +189,14 @@ def describe_renderer_mode(mode: Optional[int]) -> Optional[str]:
     if mode is None:
         return None
     return FORMATION_RENDERER_NAMES.get(mode, f"unknown-{mode}")
+
+
+def bcd_byte_to_int(value: int) -> int:
+    return ((value >> 4) * 10) + (value & 0x0F)
+
+
+def score_bytes_to_int(lo: int, mid: int, hi: int) -> int:
+    return (bcd_byte_to_int(hi) * 10000) + (bcd_byte_to_int(mid) * 100) + bcd_byte_to_int(lo)
 
 
 class MacOSGui:
@@ -361,6 +370,7 @@ class Playtester:
         self.samples = []
         self.host_capture_enabled = args.capture_host_screenshots
         self.host_capture_failure = None
+        self.suppress_host_capture = False
         self.results = {
             "mode": "external_gui_keyboard",
             "success": False,
@@ -388,6 +398,14 @@ class Playtester:
     def assert_true(self, name: str, condition: bool, detail) -> None:
         if not condition:
             raise PlaytestFailure(f"{name}: {detail}")
+
+    def run_without_host_capture(self, callback, *args, **kwargs):
+        previous = self.suppress_host_capture
+        self.suppress_host_capture = True
+        try:
+            return callback(*args, **kwargs)
+        finally:
+            self.suppress_host_capture = previous
 
     def create_keymap(self) -> None:
         x64sc_path = shutil.which("x64sc")
@@ -523,6 +541,14 @@ class Playtester:
             dive_active = self.monitor.mem_get(self.symbols["dive_active"], 1)[0] != 0
         if "dive_slot" in self.symbols:
             dive_slot = self.monitor.mem_get(self.symbols["dive_slot"], 1)[0]
+        dive_x = None
+        dive_y = None
+        if dive_active and "dive_x_lo" in self.symbols and "dive_x_hi" in self.symbols:
+            dive_x_lo = self.monitor.mem_get(self.symbols["dive_x_lo"], 1)[0]
+            dive_x_hi = self.monitor.mem_get(self.symbols["dive_x_hi"], 1)[0]
+            dive_x = dive_x_lo | (dive_x_hi << 8)
+        if dive_active and "dive_y" in self.symbols:
+            dive_y = self.monitor.mem_get(self.symbols["dive_y"], 1)[0]
         shot_active = None
         if "shot_active" in self.symbols:
             shot_active = self.monitor.mem_get(self.symbols["shot_active"], 1)[0] != 0
@@ -538,6 +564,9 @@ class Playtester:
         enemy_attack_active = None
         if "enemy_attack_active" in self.symbols:
             enemy_attack_active = self.monitor.mem_get(self.symbols["enemy_attack_active"], 1)[0] != 0
+        score_total_data = None
+        if "score_total_lo" in self.symbols:
+            score_total_data = self.monitor.mem_get(self.symbols["score_total_lo"], 3)
 
         def vic(offset: int) -> int:
             return vic_data[offset - SPRITE0_X]
@@ -598,8 +627,22 @@ class Playtester:
             "formation_char_render_mask": formation_char_render_mask,
             "formation_shift_phase": formation_shift_phase,
             "enemy_attack_active": enemy_attack_active,
+            "score_total": (
+                score_bytes_to_int(
+                    score_total_data[0],
+                    score_total_data[1],
+                    score_total_data[2],
+                )
+                if score_total_data is not None
+                else None
+            ),
+            "score_total_lo": score_total_data[0] if score_total_data is not None else None,
+            "score_total_mid": score_total_data[1] if score_total_data is not None else None,
+            "score_total_hi": score_total_data[2] if score_total_data is not None else None,
             "dive_active": dive_active,
             "dive_slot": dive_slot,
+            "dive_x": dive_x,
+            "dive_y": dive_y,
             "formation_0_enabled": (sprite_enable & 0x01) != 0,
             "formation_1_enabled": (sprite_enable & 0x08) != 0,
             "formation_2_enabled": (sprite_enable & 0x10) != 0,
@@ -629,7 +672,7 @@ class Playtester:
             "screenshot": None,
             "screenshot_sha256": None,
         }
-        if self.host_capture_enabled:
+        if self.host_capture_enabled and not self.suppress_host_capture:
             screenshot_path = self.args.frames_dir / f"{self.sample_counter:03d}-{stage}.png"
             try:
                 screenshot_settle_seconds = getattr(self.args, "screenshot_settle_seconds", 0.0)
@@ -657,6 +700,7 @@ class Playtester:
             if (
                 latest["player_enabled"]
                 and latest["formation_logical_alive_count"] >= 1
+                and latest["formation_renderer_mode"] == FORMATION_RENDERER_CHAR
                 and latest["player_y"] > latest["formation_y"]
                 and latest["player_y"] >= 180
                 and latest["formation_y"] <= 100
@@ -782,16 +826,37 @@ class Playtester:
         self.assert_true(f"{name}_slots_sampled", False, {"attempts": attempts})
 
     def assert_renderer_ready(self, name: str, sample):
-        if (
-            sample["formation_renderer_mode"] == FORMATION_RENDERER_SPRITE
-            or sample["formation_renderer_mode_name"] == "sprite"
-        ):
-            self.assert_true(name, True, sample)
-            return
         if sample["formation_renderer_mode_name"] == "char":
             self.assert_char_renderer_output(name, sample)
             return
         self.assert_true(name, False, sample)
+
+    def assert_char_slot_blank(self, name: str, sample, slot_index: int):
+        attempts = []
+        latest_sample = sample
+        for attempt in range(4):
+            cells = self.formation_char_cells(latest_sample, slot_index)
+            attempts.append(
+                {
+                    "sample": latest_sample,
+                    "slot": slot_index,
+                    "cells": cells,
+                }
+            )
+            if all(value == 0x20 for value in cells["values"]):
+                return cells
+            if attempt < 3:
+                self.resume_for(0.05)
+                latest_sample = self.read_state(include_joystick=False)
+
+        self.assert_true(name, False, {"attempts": attempts})
+
+    def expected_score_award(self, slot_index: int) -> int:
+        if slot_index < 2:
+            return 80
+        if slot_index < 4:
+            return 50
+        return 30
 
     def drive_until_clamp(self, name: str, key_code: int, joystick_mask: int, moving_left: bool):
         direction_word = "left" if moving_left else "right"
@@ -993,41 +1058,75 @@ class Playtester:
         )
         return {"observations": observations, "transitions": transitions}
 
+    def wait_for_active_dive(self, name: str, max_samples: int = 24, sample_interval: float = 0.35):
+        attempts = []
+        for index in range(max_samples):
+            self.resume_for(sample_interval)
+            sample = self.capture_sample(f"{name}-{index}", include_joystick=False)
+            attempts.append(sample)
+            if sample["dive_active"] and sample["dive_slot"] is not None:
+                return sample
+        raise PlaytestFailure(f"{name}_timeout: {attempts}")
+
+    def capture_dive_renderer_state(self, sample, dive_slot: int):
+        cells = self.formation_char_cells(sample, dive_slot)
+        sprite_enabled = sample[f"formation_{dive_slot}_enabled"]
+        char_blank = all(value == 0x20 for value in cells["values"])
+        return {
+            "sample": sample,
+            "dive_slot": dive_slot,
+            "sprite_enabled": sprite_enabled,
+            "char_cells": cells,
+            "char_blank": char_blank,
+            "dive_renderer_state": {
+                "mode": "sprite_only" if sprite_enabled and char_blank else "mixed",
+                "formation_renderer_mode": sample.get("formation_renderer_mode_name"),
+                "sprite_enabled": sprite_enabled,
+                "char_blank": char_blank,
+            },
+        }
+
     def assert_char_dive_handoff(self, name: str):
         self.logger.log("Watching for a char-mode dive so the sprite handoff can be inspected")
-        observations = []
-        for index in range(24):
+        launch = self.wait_for_active_dive(name)
+        dive_slot = launch["dive_slot"]
+        observations = [self.capture_dive_renderer_state(launch, dive_slot)]
+
+        while len(observations) < 3:
             self.resume_for(0.35)
-            sample = self.capture_sample(f"dive-watch-{index}", include_joystick=False)
-            if not sample["dive_active"] or sample["dive_slot"] is None:
-                continue
-
-            dive_slot = sample["dive_slot"]
-            cells = self.formation_char_cells(sample, dive_slot)
-            detail = {
-                "sample": sample,
-                "dive_slot": dive_slot,
-                "sprite_enabled": sample[f"formation_{dive_slot}_enabled"],
-                "char_cells": cells,
-                "char_blank": all(value == 0x20 for value in cells["values"]),
-            }
-            observations.append(detail)
-
-            if len(observations) >= 3:
+            sample = self.capture_sample(f"{name}-observe-{len(observations)}", include_joystick=False)
+            if not (sample["dive_active"] and sample["dive_slot"] == dive_slot):
                 self.assert_true(
-                    f"{name}_sprite_enabled",
-                    all(item["sprite_enabled"] for item in observations),
-                    {"observations": observations},
+                    f"{name}_same_dive_slot",
+                    len(observations) >= 2,
+                    {"dive_slot": dive_slot, "observations": observations, "sample": sample},
                 )
-                self.assert_true(
-                    f"{name}_char_slot_blank",
-                    all(item["char_blank"] for item in observations),
-                    {"observations": observations},
-                )
-                self.record_step(name, "passed", {"observations": observations})
-                return {"observations": observations}
+                break
+            observations.append(self.capture_dive_renderer_state(sample, dive_slot))
 
-        raise PlaytestFailure(f"{name}_timeout: {observations}")
+        self.assert_true(
+            f"{name}_dive_active",
+            all(item["sample"]["dive_active"] for item in observations),
+            {"observations": observations},
+        )
+        self.assert_true(
+            f"{name}_sprite_enabled",
+            all(item["sprite_enabled"] for item in observations),
+            {"observations": observations},
+        )
+        self.assert_true(
+            f"{name}_char_slot_blank",
+            all(item["char_blank"] for item in observations),
+            {"observations": observations},
+        )
+        result = {
+            "observations": observations,
+            "dive_launch_slot": dive_slot,
+            "dive_renderer_state": observations[-1]["dive_renderer_state"],
+            "last_sample": observations[-1]["sample"],
+        }
+        self.record_step(name, "passed", result)
+        return result
 
     def choose_target_slot(self, sample, preferred_index: int = 5):
         live_slots = self.live_formation_slots(sample)
@@ -1047,6 +1146,14 @@ class Playtester:
         if distance > 24:
             return 0.2
         return 0.1
+
+    def dive_tracking_burst_seconds(self, delta: int) -> float:
+        distance = abs(delta)
+        if distance > 96:
+            return 0.14
+        if distance > 40:
+            return 0.09
+        return 0.05
 
     def align_player_with_formation_slot(self, preferred_index: int = 5):
         self.logger.log("Aligning the player ship under a live formation slot before firing")
@@ -1113,9 +1220,135 @@ class Playtester:
         self.record_step("enemy_attack_armed", "passed", last_sample)
         return last_sample
 
+    def destroy_diver_and_verify_absent(self, name: str, initial_sample=None):
+        self.logger.log("Waiting for a diver kill shot and checking that its pack slot stays absent")
+        baseline_state = self.read_state(include_joystick=False)
+        baseline_alive_count = self.total_formation_alive_count(baseline_state)
+        baseline_score_total = baseline_state.get("score_total")
+        attempts = []
+
+        for attempt in range(1, 5):
+            if (
+                attempt == 1
+                and initial_sample is not None
+                and initial_sample["dive_active"]
+                and initial_sample["dive_slot"] is not None
+            ):
+                launch = initial_sample
+            else:
+                launch = self.wait_for_active_dive(
+                    f"{name}-launch-{attempt}",
+                    max_samples=30,
+                    sample_interval=0.25,
+                )
+            dive_slot = launch["dive_slot"]
+            attempt_detail = {
+                "attempt": attempt,
+                "dive_slot": dive_slot,
+                "launch_sample": launch,
+                "score_before": baseline_score_total,
+                "observations": [],
+            }
+            shot_fired = False
+            current = launch
+
+            for watch_index in range(32):
+                if watch_index > 0:
+                    self.resume_for(0.12)
+                    current = self.capture_sample(
+                        f"{name}-attempt-{attempt}-watch-{watch_index}",
+                        include_joystick=False,
+                    )
+
+                delta_x = None if current["dive_x"] is None else current["player_x"] - current["dive_x"]
+                attempt_detail["observations"].append(
+                    {
+                        "sample": current,
+                        "delta_x": delta_x,
+                    }
+                )
+
+                if not shot_fired:
+                    if not current["dive_active"] or current["dive_slot"] != dive_slot:
+                        attempt_detail["result"] = "dive_ended_before_fire"
+                        attempt_detail["final_sample"] = current
+                        break
+
+                    if delta_x is not None and abs(delta_x) > 16:
+                        key_code = LEFT_KEY_CODE if delta_x > 0 else RIGHT_KEY_CODE
+                        self.gui.key_down(key_code)
+                        try:
+                            self.resume_for(self.dive_tracking_burst_seconds(delta_x))
+                        finally:
+                            self.gui.key_up(key_code)
+                        continue
+
+                    if current["dive_y"] is not None and current["dive_y"] >= 96 and not current["shot_enabled"]:
+                        fire_sample = self.fire_once(f"dive-{attempt}")
+                        attempt_detail["fire_sample"] = fire_sample
+                        shot_fired = True
+                        current = fire_sample
+
+                if not shot_fired:
+                    continue
+
+                if not current[f"formation_{dive_slot}_alive"]:
+                    attempt_detail["result"] = "hit"
+                    attempt_detail["hit_sample"] = current
+                    attempt_detail["score_after"] = current.get("score_total")
+                    if baseline_score_total is not None and attempt_detail["score_after"] is not None:
+                        attempt_detail["score_expected"] = self.expected_score_award(dive_slot)
+                        attempt_detail["score_delta"] = attempt_detail["score_after"] - baseline_score_total
+
+                    self.resume_for(0.8)
+                    follow_up = self.capture_sample(f"{name}-gap-{attempt}", include_joystick=False)
+                    gap_char_cells = self.assert_char_slot_blank(
+                        f"{name}_slot_blank_after_hit",
+                        follow_up,
+                        dive_slot,
+                    )
+                    self.assert_true(
+                        f"{name}_slot_dead",
+                        not follow_up[f"formation_{dive_slot}_alive"],
+                        {"dive_slot": dive_slot, "follow_up": follow_up},
+                    )
+                    self.assert_true(
+                        f"{name}_alive_count",
+                        self.total_formation_alive_count(follow_up) == baseline_alive_count - 1,
+                        {
+                            "baseline_alive_count": baseline_alive_count,
+                            "follow_up": follow_up,
+                        },
+                    )
+                    if attempt_detail.get("score_expected") is not None:
+                        self.assert_true(
+                            f"{name}_score_award",
+                            attempt_detail.get("score_delta") == attempt_detail.get("score_expected"),
+                            attempt_detail,
+                        )
+
+                    attempt_detail["follow_up_sample"] = follow_up
+                    attempt_detail["gap_char_cells"] = gap_char_cells
+                    self.record_step(name, "passed", attempt_detail)
+                    return attempt_detail
+
+                if not current["shot_enabled"] and (not current["dive_active"] or current["dive_slot"] != dive_slot):
+                    attempt_detail["result"] = "miss"
+                    attempt_detail["final_sample"] = current
+                    break
+            else:
+                attempt_detail["result"] = "timeout"
+                attempt_detail["final_sample"] = current
+
+            attempts.append(attempt_detail)
+
+        raise PlaytestFailure(f"{name}_timeout: {attempts}")
+
     def destroy_formation_member(self):
         attempts = []
-        initial_alive_count = self.total_formation_alive_count(self.read_state(include_joystick=False))
+        baseline_state = self.read_state(include_joystick=False)
+        initial_alive_count = self.total_formation_alive_count(baseline_state)
+        initial_score_total = baseline_state.get("score_total")
         for attempt in range(1, 5):
             alignment = self.align_player_with_formation_slot(preferred_index=5)
             launch = self.fire_once(attempt)
@@ -1125,6 +1358,7 @@ class Playtester:
                 "aligned_sample": alignment["sample"],
                 "launch_sample": launch,
                 "shot_seen": launch["shot_enabled"],
+                "score_before": initial_score_total,
             }
 
             watch_sample = launch
@@ -1138,6 +1372,17 @@ class Playtester:
                         slot["index"] for slot in self.formation_slots(watch_sample) if not slot["alive"]
                     ]
                     attempt_detail["final_sample"] = watch_sample
+                    attempt_detail["score_after"] = watch_sample.get("score_total")
+                    if (
+                        initial_score_total is not None
+                        and attempt_detail["score_after"] is not None
+                        and len(attempt_detail["destroyed_slots"]) == 1
+                    ):
+                        destroyed_slot = attempt_detail["destroyed_slots"][0]
+                        attempt_detail["score_expected"] = self.expected_score_award(destroyed_slot)
+                        attempt_detail["score_delta"] = (
+                            attempt_detail["score_after"] - initial_score_total
+                        )
                     attempts.append(attempt_detail)
                     self.record_step("formation_member_destroyed", "passed", attempt_detail)
                     return attempt_detail
@@ -1157,6 +1402,7 @@ class Playtester:
         self.logger.log("Checking that the destroyed slot remains a visible gap while the formation keeps moving")
         self.resume_for(0.8)
         follow_up = self.capture_sample("gap-check", include_joystick=False)
+        destroyed_slot = destroyed_slots[0]
         self.assert_true(
             "gap_alive_count",
             self.total_formation_alive_count(follow_up) == INITIAL_FORMATION_ALIVE_COUNT - 1,
@@ -1171,6 +1417,18 @@ class Playtester:
             {"expected": destroyed_slots, "sample": follow_up},
         )
         self.assert_true(
+            "gap_logical_slot_stays_dead",
+            not follow_up[f"formation_{destroyed_slot}_alive"],
+            {"destroyed_slot": destroyed_slot, "sample": follow_up},
+        )
+        gap_char_cells = None
+        if follow_up.get("formation_renderer_mode_name") == "char":
+            gap_char_cells = self.assert_char_slot_blank(
+                "gap_char_slot_blank_after_hit",
+                follow_up,
+                destroyed_slot,
+            )
+        self.assert_true(
             "formation_continues_after_hit",
             self.leftmost_formation_x(hit_sample) != self.leftmost_formation_x(follow_up),
             {"hit_sample": hit_sample, "follow_up": follow_up},
@@ -1178,7 +1436,11 @@ class Playtester:
         self.record_step(
             "gap_persists",
             "passed",
-            {"destroyed_slots": destroyed_slots, "sample": follow_up},
+            {
+                "destroyed_slots": destroyed_slots,
+                "sample": follow_up,
+                "gap_char_cells": gap_char_cells,
+            },
         )
         return follow_up
 
@@ -1233,10 +1495,9 @@ class Playtester:
         )
         char_motion_state = None
         dive_handoff_state = None
+        dive_destroy_state = None
         if initial["formation_renderer_mode_name"] == "char":
             char_motion_state = self.assert_char_renderer_motion("formation_char_motion_visible")
-            self.arm_enemy_attacks()
-            dive_handoff_state = self.assert_char_dive_handoff("formation_char_dive_handoff")
 
         hit_state = self.destroy_formation_member()
         self.assert_true(
@@ -1244,7 +1505,24 @@ class Playtester:
             len(hit_state["destroyed_slots"]) == 1,
             hit_state,
         )
+        if hit_state.get("score_expected") is not None:
+            self.assert_true(
+                "score_award_after_hit",
+                hit_state.get("score_delta") == hit_state.get("score_expected"),
+                hit_state,
+            )
         gap_state = self.verify_gap_persists(hit_state["destroyed_slots"], hit_state["final_sample"])
+        if initial["formation_renderer_mode_name"] == "char":
+            self.arm_enemy_attacks()
+            dive_handoff_state = self.run_without_host_capture(
+                self.assert_char_dive_handoff,
+                "formation_char_dive_handoff",
+            )
+            dive_destroy_state = self.run_without_host_capture(
+                self.destroy_diver_and_verify_absent,
+                "formation_char_dive_destroyed",
+                dive_handoff_state["last_sample"],
+            )
 
         captured_hashes = {
             sample["screenshot_sha256"]
@@ -1287,8 +1565,14 @@ class Playtester:
             "formation_direction_samples": bounce_state["deltas"],
             "formation_char_motion_samples": 0 if char_motion_state is None else len(char_motion_state["transitions"]),
             "formation_char_dive_samples": 0 if dive_handoff_state is None else len(dive_handoff_state["observations"]),
+            "dive_launch_slot": None if dive_handoff_state is None else dive_handoff_state["dive_launch_slot"],
+            "dive_renderer_state": None if dive_handoff_state is None else dive_handoff_state["dive_renderer_state"],
             "shot_attempts": hit_state["attempt"],
             "destroyed_slots": hit_state["destroyed_slots"],
+            "score_after_hit": hit_state.get("score_after"),
+            "score_delta": hit_state.get("score_delta"),
+            "dive_destroyed_slot": None if dive_destroy_state is None else dive_destroy_state.get("dive_slot"),
+            "dive_score_delta": None if dive_destroy_state is None else dive_destroy_state.get("score_delta"),
             "alive_slots_after_hit": self.total_formation_alive_count(gap_state),
             "captured_frame_count": len(captured_hashes),
             "host_screenshots_enabled": self.args.capture_host_screenshots,

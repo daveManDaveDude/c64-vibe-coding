@@ -1,4 +1,5 @@
 {
+  "task.autoDetect": "off",
   "vs64.viceExecutable": "/opt/homebrew/bin/x64sc",
   "vs64.vicePort": "6502",
   "vs64.viceTimeout": "10",
