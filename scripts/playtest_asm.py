@@ -632,6 +632,9 @@ class Playtester:
         if self.host_capture_enabled:
             screenshot_path = self.args.frames_dir / f"{self.sample_counter:03d}-{stage}.png"
             try:
+                screenshot_settle_seconds = getattr(self.args, "screenshot_settle_seconds", 0.0)
+                if screenshot_settle_seconds > 0:
+                    time.sleep(screenshot_settle_seconds)
                 screenshot_hash = self.gui.capture_window(screenshot_path)
             except PlaytestFailure as exc:
                 self.host_capture_enabled = False
@@ -686,8 +689,14 @@ class Playtester:
         col = self.formation_char_col(sample, slot_index)
         values = []
         addresses = []
+        band_width = self.symbols.get("FORMATION_CHAR_BAND_WIDTH", 40)
         for offset in range(4):
-            address = self.symbols["SCREEN_RAM"] + (row * 40) + col + offset
+            probe_col = col + offset
+            if probe_col >= band_width:
+                addresses.append(None)
+                values.append(0x20)
+                continue
+            address = self.symbols["SCREEN_RAM"] + (row * 40) + probe_col
             addresses.append(address)
             values.append(self.monitor.mem_get(address, 1)[0])
         return {

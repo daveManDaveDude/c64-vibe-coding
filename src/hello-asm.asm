@@ -82,9 +82,11 @@ BasicUpstart2(start)
 .label FORMATION_BOTTOM_Y = 116
 .label FORMATION_MIN_X_LO = $18
 .label FORMATION_MIN_X_HI = $00
+.label FORMATION_CHAR_MIN_X_LO = $1c
+.label FORMATION_CHAR_MIN_X_HI = $00
 .label FORMATION_MAX_X_LO = $1c
 .label FORMATION_MAX_X_HI = $01
-.label FORMATION_CHAR_MAX_X_LO = $24
+.label FORMATION_CHAR_MAX_X_LO = $1e
 .label FORMATION_CHAR_MAX_X_HI = $01
 .label FORMATION_SLOT0_OFFSET = 0
 .label FORMATION_SLOT1_OFFSET = 36
@@ -241,6 +243,7 @@ start:
 
 main_loop:
   jsr wait_frame
+  jsr render_formation_if_char_mode
   jsr update_effects
   jsr update_game_state
   jsr update_player
@@ -248,8 +251,8 @@ main_loop:
   jsr update_formation
   jsr update_dive_attack
   jsr update_enemy_hit_animations
-  jsr render_formation_if_char_mode
   jsr update_enemy_fire
+  inc frame_capture_counter
   jmp main_loop
 
 init_vic:
@@ -700,6 +703,8 @@ init_enemy_fire_loop:
   sta player_effect_y
   sta player_effect_pointer
   sta player_effect_color
+  sta frame_capture_ready
+  sta frame_capture_counter
   lda #$00
   sta player_white_slot
   lda #$01
@@ -771,7 +776,11 @@ render_formation_if_char_mode:
   lda formation_renderer_mode
   cmp #FORMATION_RENDERER_MODE_CHAR
   bne render_formation_if_char_mode_done
+  lda #$00
+  sta frame_capture_ready
   jsr render_formation
+  lda #$01
+  sta frame_capture_ready
 render_formation_if_char_mode_done:
   rts
 
@@ -1074,18 +1083,49 @@ formation_move_left:
 formation_dec_low:
   dec formation_x_lo
 
+  lda formation_renderer_mode
+  cmp #FORMATION_RENDERER_MODE_CHAR
+  beq formation_check_char_min
   lda formation_x_hi
   cmp #FORMATION_MIN_X_HI
-  bcc formation_clamp_min
-  bne formation_store_x
+  bcc formation_move_left_need_clamp_min
+  beq formation_check_min_lo
+  jmp formation_store_x
+formation_check_min_lo:
   lda formation_x_lo
   cmp #FORMATION_MIN_X_LO
-  bcs formation_store_x
+  bcc formation_move_left_need_clamp_min
+  jmp formation_store_x
+formation_move_left_need_clamp_min:
+  jmp formation_clamp_min
+
+formation_check_char_min:
+  lda formation_x_hi
+  cmp #FORMATION_CHAR_MIN_X_HI
+  bcc formation_move_left_need_clamp_char_min
+  beq formation_check_char_min_lo
+  jmp formation_store_x
+formation_check_char_min_lo:
+  lda formation_x_lo
+  cmp #FORMATION_CHAR_MIN_X_LO
+  bcc formation_move_left_need_clamp_char_min
+  jmp formation_store_x
+formation_move_left_need_clamp_char_min:
+  jmp formation_clamp_char_min
 
 formation_clamp_min:
   lda #FORMATION_MIN_X_LO
   sta formation_x_lo
   lda #FORMATION_MIN_X_HI
+  sta formation_x_hi
+  lda #$01
+  sta formation_dir
+  jmp formation_store_x
+
+formation_clamp_char_min:
+  lda #FORMATION_CHAR_MIN_X_LO
+  sta formation_x_lo
+  lda #FORMATION_CHAR_MIN_X_HI
   sta formation_x_hi
   lda #$01
   sta formation_dir
@@ -4129,34 +4169,21 @@ draw_formation_char_slot_common:
   sta COLOR_PTR + 1
 
   ldy formation_char_col
-  lda formation_char_glyph_base
-  sta (SCREEN_PTR), y
-  lda formation_char_color
-  sta (COLOR_PTR), y
-
-  iny
-  lda formation_char_glyph_base
+  ldx #$00
+draw_formation_char_slot_common_loop:
+  cpy #(FORMATION_CHAR_BAND_ORIGIN_COL + FORMATION_CHAR_BAND_WIDTH)
+  bcs draw_formation_char_slot_common_done
+  txa
   clc
-  adc #$01
+  adc formation_char_glyph_base
   sta (SCREEN_PTR), y
   lda formation_char_color
   sta (COLOR_PTR), y
-
   iny
-  lda formation_char_glyph_base
-  clc
-  adc #$02
-  sta (SCREEN_PTR), y
-  lda formation_char_color
-  sta (COLOR_PTR), y
-
-  iny
-  lda formation_char_glyph_base
-  clc
-  adc #$03
-  sta (SCREEN_PTR), y
-  lda formation_char_color
-  sta (COLOR_PTR), y
+  inx
+  cpx #$04
+  bcc draw_formation_char_slot_common_loop
+draw_formation_char_slot_common_done:
   rts
 
 clear_formation_char_slot_screen:
@@ -4193,25 +4220,19 @@ clear_formation_char_slot_screen:
   sta COLOR_PTR + 1
 
   ldy formation_char_col
+  ldx #$00
+clear_formation_char_slot_screen_loop:
+  cpy #(FORMATION_CHAR_BAND_ORIGIN_COL + FORMATION_CHAR_BAND_WIDTH)
+  bcs clear_formation_char_slot_screen_done
   lda #$20
   sta (SCREEN_PTR), y
   lda #PLAYFIELD_TEXT_COLOR
   sta (COLOR_PTR), y
   iny
-  lda #$20
-  sta (SCREEN_PTR), y
-  lda #PLAYFIELD_TEXT_COLOR
-  sta (COLOR_PTR), y
-  iny
-  lda #$20
-  sta (SCREEN_PTR), y
-  lda #PLAYFIELD_TEXT_COLOR
-  sta (COLOR_PTR), y
-  iny
-  lda #$20
-  sta (SCREEN_PTR), y
-  lda #PLAYFIELD_TEXT_COLOR
-  sta (COLOR_PTR), y
+  inx
+  cpx #$04
+  bcc clear_formation_char_slot_screen_loop
+clear_formation_char_slot_screen_done:
   rts
 
 update_formation_char_slot_glyphs:
@@ -4421,6 +4442,10 @@ formation_renderer_mode:
 formation_renderer_requested_mode:
   .byte FORMATION_DEFAULT_RENDERER_MODE
 formation_shift_phase:
+  .byte $00
+frame_capture_counter:
+  .byte $00
+frame_capture_ready:
   .byte $00
 game_state:
   .byte GAME_STATE_READY
