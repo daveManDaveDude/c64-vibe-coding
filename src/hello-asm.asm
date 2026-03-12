@@ -81,15 +81,14 @@ BasicUpstart2(start)
 .label FORMATION_MID_Y = 92
 .label FORMATION_BOTTOM_Y = 116
 .label FORMATION_CHAR_TRIM_TOP_ROWS = 4
-.label FORMATION_CHAR_TOP_Y = FORMATION_TOP_Y + FORMATION_CHAR_TRIM_TOP_ROWS
-.label FORMATION_CHAR_MID_Y = FORMATION_MID_Y + FORMATION_CHAR_TRIM_TOP_ROWS
-.label FORMATION_CHAR_BOTTOM_Y = FORMATION_BOTTOM_Y + FORMATION_CHAR_TRIM_TOP_ROWS
-.label FORMATION_MIN_X_LO = $18
-.label FORMATION_MIN_X_HI = $00
+.label FORMATION_CHAR_BAND_TOP_Y = PLAYFIELD_TOP_Y + (FORMATION_CHAR_BAND_TOP_ROW * 8)
+.label FORMATION_CHAR_BAND_MID_Y = PLAYFIELD_TOP_Y + (FORMATION_CHAR_BAND_MID_ROW * 8)
+.label FORMATION_CHAR_BAND_BOTTOM_Y = PLAYFIELD_TOP_Y + (FORMATION_CHAR_BAND_BOTTOM_ROW * 8)
+.label FORMATION_CHAR_TOP_Y = FORMATION_CHAR_BAND_TOP_Y - FORMATION_CHAR_TRIM_TOP_ROWS
+.label FORMATION_CHAR_MID_Y = FORMATION_CHAR_BAND_MID_Y - FORMATION_CHAR_TRIM_TOP_ROWS
+.label FORMATION_CHAR_BOTTOM_Y = FORMATION_CHAR_BAND_BOTTOM_Y - FORMATION_CHAR_TRIM_TOP_ROWS
 .label FORMATION_CHAR_MIN_X_LO = $1c
 .label FORMATION_CHAR_MIN_X_HI = $00
-.label FORMATION_MAX_X_LO = $1c
-.label FORMATION_MAX_X_HI = $01
 .label FORMATION_CHAR_MAX_X_LO = $1e
 .label FORMATION_CHAR_MAX_X_HI = $01
 .label FORMATION_SLOT0_OFFSET = 0
@@ -175,13 +174,6 @@ BasicUpstart2(start)
 .label SCORE_GRUNT_MID = $00
 .label SCORE_GRUNT_HI = $00
 .label FORMATION_ANIMATION_SHIFT = 5
-.label FORMATION_RENDERER_MODE_SPRITE = $00
-.label FORMATION_RENDERER_MODE_CHAR = $01
-#if FORMATION_CHAR_RENDERER
-  .label FORMATION_DEFAULT_RENDERER_MODE = FORMATION_RENDERER_MODE_CHAR
-#else
-  .label FORMATION_DEFAULT_RENDERER_MODE = FORMATION_RENDERER_MODE_SPRITE
-#endif
 .label FORMATION_CHAR_BASE = 96
 .label FORMATION_CHAR_SLOT_STRIDE = 4
 .label FORMATION_CHAR_BAND_ORIGIN_COL = 0
@@ -262,7 +254,11 @@ start:
 
 main_loop:
   jsr wait_frame
-  jsr render_formation_if_char_mode
+  lda #$00
+  sta frame_capture_ready
+  jsr render_formation
+  lda #$01
+  sta frame_capture_ready
   jsr update_effects
   jsr update_game_state
   jsr update_player
@@ -526,7 +522,6 @@ init_formation:
   lda #$00
   sta formation_frame
   sta formation_anim_index
-  sta formation_renderer_mode
   jsr init_formation_renderer
   jsr update_formation_animation_state
   jsr update_formation_slot_positions
@@ -534,45 +529,17 @@ init_formation:
   rts
 
 init_formation_renderer:
-  lda formation_renderer_requested_mode
-  and #$01
-  sta formation_renderer_mode
   lda #$00
   sta SPRITE_X_MSB
   sta SPRITE_PRIORITY
   sta SPRITE_X_EXPAND
   sta SPRITE_Y_EXPAND
-
-  lda #FORMATION_TOP_Y
-  sta SPRITE0_Y
-  sta SPRITE3_Y
-  lda #FORMATION_MID_Y
-  sta SPRITE4_Y
-  sta SPRITE5_Y
-  lda #FORMATION_BOTTOM_Y
-  sta SPRITE6_Y
-  sta SPRITE7_Y
-
-  lda #FORMATION_SPRITE_MASK
   sta SPRITE_MULTICOLOR
-
+  sta SPRITE_ENABLE
   lda #FORMATION_MULTI0_COLOR
   sta SPRITE_MULTICOLOR_0
   lda #FORMATION_MULTI1_COLOR
   sta SPRITE_MULTICOLOR_1
-
-  lda #FLAGSHIP_COLOR
-  sta SPRITE0_COLOR
-  sta SPRITE3_COLOR
-  lda #ESCORT_COLOR
-  sta SPRITE4_COLOR
-  sta SPRITE5_COLOR
-  lda #GRUNT_COLOR
-  sta SPRITE6_COLOR
-  sta SPRITE7_COLOR
-
-  lda #FORMATION_SPRITE_MASK
-  sta SPRITE_ENABLE
   jsr clear_formation_char_band
   jsr clear_formation_char_glyphs
   lda #$00
@@ -683,6 +650,7 @@ init_dive_attack:
   sta dive_y
   sta dive_launch_counter
   sta dive_launch_y_debug
+  sta dive_launch_hold
 
   lda #DIVE_SLOT_NONE
   sta dive_slot
@@ -736,10 +704,6 @@ init_enemy_fire_loop:
   sta frame_capture_ready
   sta frame_capture_counter
   sta player_bottom_sprite_mask_debug
-  lda #$00
-  sta player_white_slot
-  lda #$01
-  sta player_cyan_slot
   lda #RASTER_PHASE_TOP
   sta raster_phase
   sta formation_anim_index
@@ -796,29 +760,10 @@ raster_irq_top_phase:
   lda #$00
   sta player_extra_visible
   sta player_bottom_sprite_mask_debug
-  lda formation_renderer_mode
-  cmp #FORMATION_RENDERER_MODE_SPRITE
-  bne raster_irq_top_phase_char
-  jsr render_formation
-  jmp raster_irq_done
-
-raster_irq_top_phase_char:
   jsr render_char_mode_top_sprites
 
 raster_irq_done:
   jmp $ea81
-
-render_formation_if_char_mode:
-  lda formation_renderer_mode
-  cmp #FORMATION_RENDERER_MODE_CHAR
-  bne render_formation_if_char_mode_done
-  lda #$00
-  sta frame_capture_ready
-  jsr render_formation
-  lda #$01
-  sta frame_capture_ready
-render_formation_if_char_mode_done:
-  rts
 
 wait_frame:
   lda #$ff
@@ -838,6 +783,7 @@ clear_active_dive_state:
   sta dive_anim_frame
   sta dive_anim_tick
   sta dive_fire_hold_timer
+  sta dive_launch_hold
 
   lda #DIVE_SLOT_NONE
   sta dive_slot
@@ -851,7 +797,6 @@ cancel_active_dive:
   lda dive_active
   beq cancel_active_dive_done
   jsr update_formation_slot_positions
-  jsr restore_dive_slot_y
   jsr clear_active_dive_state
 cancel_active_dive_done:
   rts
@@ -1120,46 +1065,18 @@ formation_move_left:
 formation_dec_low:
   dec formation_x_lo
 
-  lda formation_renderer_mode
-  cmp #FORMATION_RENDERER_MODE_CHAR
-  beq formation_check_char_min
   lda formation_x_hi
-  cmp #FORMATION_MIN_X_HI
-  bcc formation_move_left_need_clamp_min
+  cmp #FORMATION_CHAR_MIN_X_HI
+  bcc formation_clamp_min
   beq formation_check_min_lo
   jmp formation_store_x
 formation_check_min_lo:
   lda formation_x_lo
-  cmp #FORMATION_MIN_X_LO
-  bcc formation_move_left_need_clamp_min
-  jmp formation_store_x
-formation_move_left_need_clamp_min:
-  jmp formation_clamp_min
-
-formation_check_char_min:
-  lda formation_x_hi
-  cmp #FORMATION_CHAR_MIN_X_HI
-  bcc formation_move_left_need_clamp_char_min
-  beq formation_check_char_min_lo
-  jmp formation_store_x
-formation_check_char_min_lo:
-  lda formation_x_lo
   cmp #FORMATION_CHAR_MIN_X_LO
-  bcc formation_move_left_need_clamp_char_min
+  bcc formation_clamp_min
   jmp formation_store_x
-formation_move_left_need_clamp_char_min:
-  jmp formation_clamp_char_min
 
 formation_clamp_min:
-  lda #FORMATION_MIN_X_LO
-  sta formation_x_lo
-  lda #FORMATION_MIN_X_HI
-  sta formation_x_hi
-  lda #$01
-  sta formation_dir
-  jmp formation_store_x
-
-formation_clamp_char_min:
   lda #FORMATION_CHAR_MIN_X_LO
   sta formation_x_lo
   lda #FORMATION_CHAR_MIN_X_HI
@@ -1174,19 +1091,6 @@ formation_move_right:
   inc formation_x_hi
 
 formation_check_max:
-  lda formation_renderer_mode
-  cmp #FORMATION_RENDERER_MODE_CHAR
-  beq formation_check_char_max
-  lda formation_x_hi
-  cmp #FORMATION_MAX_X_HI
-  bcc formation_store_x
-  bne formation_clamp_max
-  lda formation_x_lo
-  cmp #FORMATION_MAX_X_LO
-  bcc formation_store_x
-  jmp formation_clamp_max
-
-formation_check_char_max:
   lda formation_x_hi
   cmp #FORMATION_CHAR_MAX_X_HI
   bcc formation_store_x
@@ -1194,15 +1098,7 @@ formation_check_char_max:
   lda formation_x_lo
   cmp #FORMATION_CHAR_MAX_X_LO
   bcc formation_store_x
-
-formation_clamp_max:
-  lda #FORMATION_MAX_X_LO
-  sta formation_x_lo
-  lda #FORMATION_MAX_X_HI
-  sta formation_x_hi
-  lda #$ff
-  sta formation_dir
-  jmp formation_store_x
+  jmp formation_clamp_char_max
 
 formation_clamp_char_max:
   lda #FORMATION_CHAR_MAX_X_LO
@@ -1244,7 +1140,13 @@ update_dive_attack_run:
 
   lda #$00
   sta dive_moved_this_tick
+  lda dive_launch_hold
+  beq update_dive_attack_phase_check
+  jsr store_dive_position
+  dec dive_launch_hold
+  rts
 
+update_dive_attack_phase_check:
   lda dive_phase
   beq dive_phase0_update
   cmp #$01
@@ -1317,7 +1219,6 @@ dive_store_position_done:
 
 finish_dive_return:
   jsr update_formation_slot_positions
-  jsr restore_dive_slot_y
   jsr clear_active_dive_state
   rts
 
@@ -1470,6 +1371,9 @@ begin_dive:
   sta dive_y
   sta dive_launch_y_debug
   inc dive_launch_counter
+  lda #$01
+  sta dive_launch_hold
+  jsr clear_dive_slot_char_handoff
   lda #$01
   sta dive_active
   lda #$00
@@ -1631,186 +1535,7 @@ dive_move_right_done:
 
 store_dive_position:
   jsr select_dive_animation_frame
-  lda formation_renderer_mode
-  cmp #FORMATION_RENDERER_MODE_CHAR
-  bne store_dive_position_sprite_map
   jmp store_dive_position_char
-store_dive_position_sprite_map:
-  lda dive_slot
-  beq store_dive_position_slot0
-  cmp #$01
-  beq store_dive_position_slot1
-  cmp #$02
-  beq store_dive_position_slot2
-  cmp #$03
-  beq store_dive_position_slot3
-  cmp #$04
-  beq store_dive_position_slot4
-  cmp #$05
-  beq store_dive_position_slot5
-  rts
-
-store_dive_position_slot0:
-  jmp store_dive_slot0
-
-store_dive_position_slot1:
-  jmp store_dive_slot1
-
-store_dive_position_slot2:
-  jmp store_dive_slot2
-
-store_dive_position_slot3:
-  jmp store_dive_slot3
-
-store_dive_position_slot4:
-  jmp store_dive_slot4
-
-store_dive_position_slot5:
-  jmp store_dive_slot5
-
-store_dive_slot0:
-  lda dive_x_lo
-  sta SPRITE0_X
-  lda dive_y
-  sta SPRITE0_Y
-  lda SPRITE_X_MSB
-  and #%11111110
-  ldx dive_x_hi
-  beq store_dive_slot0_done
-  ora #FORMATION_SLOT0_MASK
-store_dive_slot0_done:
-  sta SPRITE_X_MSB
-  lda dive_sprite_pointer
-  sta SPRITE_POINTERS
-  lda dive_sprite_color
-  sta SPRITE0_COLOR
-  lda SPRITE_MULTICOLOR
-  ora #FORMATION_SLOT0_MASK
-  sta SPRITE_MULTICOLOR
-  lda SPRITE_ENABLE
-  ora #FORMATION_SLOT0_MASK
-  sta SPRITE_ENABLE
-  rts
-
-store_dive_slot1:
-  lda dive_x_lo
-  sta SPRITE3_X
-  lda dive_y
-  sta SPRITE3_Y
-  lda SPRITE_X_MSB
-  and #%11110111
-  ldx dive_x_hi
-  beq store_dive_slot1_done
-  ora #FORMATION_SLOT1_MASK
-store_dive_slot1_done:
-  sta SPRITE_X_MSB
-  lda dive_sprite_pointer
-  sta SPRITE_POINTERS + 3
-  lda dive_sprite_color
-  sta SPRITE3_COLOR
-  lda SPRITE_MULTICOLOR
-  ora #FORMATION_SLOT1_MASK
-  sta SPRITE_MULTICOLOR
-  lda SPRITE_ENABLE
-  ora #FORMATION_SLOT1_MASK
-  sta SPRITE_ENABLE
-  rts
-
-store_dive_slot2:
-  lda dive_x_lo
-  sta SPRITE4_X
-  lda dive_y
-  sta SPRITE4_Y
-  lda SPRITE_X_MSB
-  and #%11101111
-  ldx dive_x_hi
-  beq store_dive_slot2_done
-  ora #FORMATION_SLOT2_MASK
-store_dive_slot2_done:
-  sta SPRITE_X_MSB
-  lda dive_sprite_pointer
-  sta SPRITE_POINTERS + 4
-  lda dive_sprite_color
-  sta SPRITE4_COLOR
-  lda SPRITE_MULTICOLOR
-  ora #FORMATION_SLOT2_MASK
-  sta SPRITE_MULTICOLOR
-  lda SPRITE_ENABLE
-  ora #FORMATION_SLOT2_MASK
-  sta SPRITE_ENABLE
-  rts
-
-store_dive_slot3:
-  lda dive_x_lo
-  sta SPRITE5_X
-  lda dive_y
-  sta SPRITE5_Y
-  lda SPRITE_X_MSB
-  and #%11011111
-  ldx dive_x_hi
-  beq store_dive_slot3_done
-  ora #FORMATION_SLOT3_MASK
-store_dive_slot3_done:
-  sta SPRITE_X_MSB
-  lda dive_sprite_pointer
-  sta SPRITE_POINTERS + 5
-  lda dive_sprite_color
-  sta SPRITE5_COLOR
-  lda SPRITE_MULTICOLOR
-  ora #FORMATION_SLOT3_MASK
-  sta SPRITE_MULTICOLOR
-  lda SPRITE_ENABLE
-  ora #FORMATION_SLOT3_MASK
-  sta SPRITE_ENABLE
-  rts
-
-store_dive_slot4:
-  lda dive_x_lo
-  sta SPRITE6_X
-  lda dive_y
-  sta SPRITE6_Y
-  lda SPRITE_X_MSB
-  and #%10111111
-  ldx dive_x_hi
-  beq store_dive_slot4_done
-  ora #FORMATION_SLOT4_MASK
-store_dive_slot4_done:
-  sta SPRITE_X_MSB
-  lda dive_sprite_pointer
-  sta SPRITE_POINTERS + 6
-  lda dive_sprite_color
-  sta SPRITE6_COLOR
-  lda SPRITE_MULTICOLOR
-  ora #FORMATION_SLOT4_MASK
-  sta SPRITE_MULTICOLOR
-  lda SPRITE_ENABLE
-  ora #FORMATION_SLOT4_MASK
-  sta SPRITE_ENABLE
-  rts
-
-store_dive_slot5:
-  lda dive_x_lo
-  sta SPRITE7_X
-  lda dive_y
-  sta SPRITE7_Y
-  lda SPRITE_X_MSB
-  and #%01111111
-  ldx dive_x_hi
-  beq store_dive_slot5_done
-  ora #FORMATION_SLOT5_MASK
-store_dive_slot5_done:
-  sta SPRITE_X_MSB
-  lda dive_sprite_pointer
-  sta SPRITE_POINTERS + 7
-  lda dive_sprite_color
-  sta SPRITE7_COLOR
-  lda SPRITE_MULTICOLOR
-  ora #FORMATION_SLOT5_MASK
-  sta SPRITE_MULTICOLOR
-  lda SPRITE_ENABLE
-  ora #FORMATION_SLOT5_MASK
-  sta SPRITE_ENABLE
-  rts
 
 select_dive_animation_frame:
   ldx dive_anim_frame
@@ -2689,8 +2414,6 @@ enemy_hit_anim_loop:
 advance_slot_explosion:
   lda #ENEMY_EXPLOSION_FRAME_TICKS
   sta slot_explosion_timer, x
-  txa
-  jsr set_slot_explosion_frame
 
 enemy_hit_anim_next:
   inx
@@ -2704,64 +2427,13 @@ start_slot_explosion:
   sta slot_explosion_frame, x
   lda #ENEMY_EXPLOSION_FRAME_TICKS
   sta slot_explosion_timer, x
-  txa
-  jmp set_slot_explosion_frame
+  rts
 
 finish_slot_explosion:
   tax
   lda #$00
   sta slot_explosion_timer, x
   sta slot_explosion_frame, x
-  lda formation_renderer_mode
-  cmp #FORMATION_RENDERER_MODE_CHAR
-  beq finish_slot_explosion_done
-  txa
-  beq finish_slot0_explosion
-  cmp #$01
-  beq finish_slot1_explosion
-  cmp #$02
-  beq finish_slot2_explosion
-  cmp #$03
-  beq finish_slot3_explosion
-  cmp #$04
-  beq finish_slot4_explosion
-  jmp finish_slot5_explosion
-
-finish_slot0_explosion:
-  lda SPRITE_ENABLE
-  and #%11111110
-  sta SPRITE_ENABLE
-  rts
-
-finish_slot1_explosion:
-  lda SPRITE_ENABLE
-  and #%11110111
-  sta SPRITE_ENABLE
-  rts
-
-finish_slot2_explosion:
-  lda SPRITE_ENABLE
-  and #%11101111
-  sta SPRITE_ENABLE
-  rts
-
-finish_slot3_explosion:
-  lda SPRITE_ENABLE
-  and #%11011111
-  sta SPRITE_ENABLE
-  rts
-
-finish_slot4_explosion:
-  lda SPRITE_ENABLE
-  and #%10111111
-  sta SPRITE_ENABLE
-  rts
-
-finish_slot5_explosion:
-  lda SPRITE_ENABLE
-  and #%01111111
-  sta SPRITE_ENABLE
-finish_slot_explosion_done:
   rts
 
 destroy_slot0:
@@ -3024,61 +2696,7 @@ shot_store_x_done:
   sta SPRITE_X_MSB
   rts
 
-* = $4000 "Player Reuse Routines"
-
-slot_available_for_player:
-  lda dive_active
-  beq slot_available_yes
-  cpx dive_slot
-  beq slot_available_no
-slot_available_yes:
-  sec
-  rts
-slot_available_no:
-  clc
-  rts
-
-slot_reserved_for_player_bottom:
-  lda player_extra_visible
-  beq slot_reserved_for_player_bottom_no
-  txa
-  cmp player_white_slot
-  beq slot_reserved_for_player_bottom_yes
-  cmp player_cyan_slot
-  beq slot_reserved_for_player_bottom_yes
-slot_reserved_for_player_bottom_no:
-  clc
-  rts
-slot_reserved_for_player_bottom_yes:
-  sec
-  rts
-
-select_player_extra_slots:
-  ldx #$00
-select_player_white_slot:
-  jsr slot_available_for_player
-  bcs player_white_slot_found
-  inx
-  cpx #$06
-  bcc select_player_white_slot
-  rts
-player_white_slot_found:
-  stx player_white_slot
-
-  ldx #$00
-select_player_cyan_slot:
-  cpx player_white_slot
-  beq player_cyan_slot_next
-  jsr slot_available_for_player
-  bcs player_cyan_slot_found
-player_cyan_slot_next:
-  inx
-  cpx #$06
-  bcc select_player_cyan_slot
-  rts
-player_cyan_slot_found:
-  stx player_cyan_slot
-  rts
+* = $4000 "Player Effect Routines"
 
 draw_player_bottom_effects:
   lda player_explosion_active
@@ -3088,91 +2706,10 @@ draw_player_bottom_effects_player:
   jmp draw_player_extra_layers
 
 draw_player_extra_layers:
-  lda formation_renderer_mode
-  cmp #FORMATION_RENDERER_MODE_CHAR
-  bne draw_player_extra_layers_sprite
   jmp draw_player_extra_layers_char
-draw_player_extra_layers_sprite:
-  lda player_visible
-  beq draw_player_extra_layers_done
-
-  jsr select_player_extra_slots
-
-  ldx player_white_slot
-  lda #PLAYER_WHITE_SPRITE_PTR
-  sta player_reuse_pointer
-  lda #PLAYER_WHITE_COLOR
-  sta player_reuse_color
-  jsr store_player_reused_slot
-
-  ldx player_cyan_slot
-  lda #PLAYER_CYAN_SPRITE_PTR
-  sta player_reuse_pointer
-  lda #PLAYER_CYAN_COLOR
-  sta player_reuse_color
-  jsr store_player_reused_slot
-
-draw_player_extra_layers_done:
-  rts
 
 draw_player_explosion:
-  lda formation_renderer_mode
-  cmp #FORMATION_RENDERER_MODE_CHAR
-  bne draw_player_explosion_sprite
   jmp draw_player_explosion_char
-draw_player_explosion_sprite:
-  jsr select_player_extra_slots
-
-  lda #PLAYER_EXPLOSION_MULTI0_COLOR
-  sta SPRITE_MULTICOLOR_0
-  lda #PLAYER_EXPLOSION_MULTI1_COLOR
-  sta SPRITE_MULTICOLOR_1
-
-  ldy player_explosion_frame
-  lda player_explosion_top_left_sequence, y
-  sta player_explosion_top_left_pointer
-  lda player_explosion_top_right_sequence, y
-  sta player_explosion_top_right_pointer
-  lda player_explosion_bottom_left_sequence, y
-  sta player_explosion_bottom_left_pointer
-  lda player_explosion_bottom_right_sequence, y
-  sta player_explosion_bottom_right_pointer
-
-  jsr store_player_explosion_sprite1
-  jsr store_player_explosion_sprite2
-
-  lda player_explosion_x_lo
-  sta player_effect_x_lo
-  lda player_explosion_x_hi
-  sta player_effect_x_hi
-  lda player_explosion_y
-  clc
-  adc #PLAYER_EXPLOSION_TILE_OFFSET
-  sta player_effect_y
-  lda player_explosion_bottom_left_pointer
-  sta player_effect_pointer
-  lda #PLAYER_EXPLOSION_COLOR
-  sta player_effect_color
-  ldx player_white_slot
-  jsr store_player_explosion_reused_slot
-
-  lda player_explosion_x_lo
-  clc
-  adc #PLAYER_EXPLOSION_TILE_OFFSET
-  sta player_effect_x_lo
-  lda player_explosion_x_hi
-  adc #$00
-  sta player_effect_x_hi
-  lda player_explosion_y
-  clc
-  adc #PLAYER_EXPLOSION_TILE_OFFSET
-  sta player_effect_y
-  lda player_explosion_bottom_right_pointer
-  sta player_effect_pointer
-  lda #PLAYER_EXPLOSION_COLOR
-  sta player_effect_color
-  ldx player_cyan_slot
-  jmp store_player_explosion_reused_slot
 
 store_player_explosion_sprite1:
   lda player_explosion_x_lo
@@ -3228,635 +2765,19 @@ store_player_explosion_sprite2_msb_done:
   sta SPRITE_ENABLE
   rts
 
-store_player_reused_slot:
-  txa
-  bne store_player_reused_slot_check1
-  jmp store_player_reused_slot0
-store_player_reused_slot_check1:
-  cmp #$01
-  bne store_player_reused_slot_check2
-  jmp store_player_reused_slot1
-store_player_reused_slot_check2:
-  cmp #$02
-  bne store_player_reused_slot_check3
-  jmp store_player_reused_slot2
-store_player_reused_slot_check3:
-  cmp #$03
-  bne store_player_reused_slot_check4
-  jmp store_player_reused_slot3
-store_player_reused_slot_check4:
-  cmp #$04
-  bne store_player_reused_slot_check5
-  jmp store_player_reused_slot4
-store_player_reused_slot_check5:
-  jmp store_player_reused_slot5
-
-store_player_reused_slot0:
-  lda player_x_lo
-  sta SPRITE0_X
-  lda #PLAYER_Y
-  sta SPRITE0_Y
-  lda SPRITE_X_MSB
-  and #%11111110
-  ldx player_x_hi
-  beq store_player_reused_slot0_msb_done
-  lda SPRITE_X_MSB
-  and #%11111110
-  ora #FORMATION_SLOT0_MASK
-store_player_reused_slot0_msb_done:
-  sta SPRITE_X_MSB
-  lda player_reuse_pointer
-  sta SPRITE_POINTERS
-  lda player_reuse_color
-  sta SPRITE0_COLOR
-  lda SPRITE_MULTICOLOR
-  and #%11111110
-  sta SPRITE_MULTICOLOR
-  lda SPRITE_ENABLE
-  ora #FORMATION_SLOT0_MASK
-  sta SPRITE_ENABLE
-  rts
-
-store_player_reused_slot1:
-  lda player_x_lo
-  sta SPRITE3_X
-  lda #PLAYER_Y
-  sta SPRITE3_Y
-  lda SPRITE_X_MSB
-  and #%11110111
-  ldx player_x_hi
-  beq store_player_reused_slot1_msb_done
-  lda SPRITE_X_MSB
-  and #%11110111
-  ora #FORMATION_SLOT1_MASK
-store_player_reused_slot1_msb_done:
-  sta SPRITE_X_MSB
-  lda player_reuse_pointer
-  sta SPRITE_POINTERS + 3
-  lda player_reuse_color
-  sta SPRITE3_COLOR
-  lda SPRITE_MULTICOLOR
-  and #%11110111
-  sta SPRITE_MULTICOLOR
-  lda SPRITE_ENABLE
-  ora #FORMATION_SLOT1_MASK
-  sta SPRITE_ENABLE
-  rts
-
-store_player_reused_slot2:
-  lda player_x_lo
-  sta SPRITE4_X
-  lda #PLAYER_Y
-  sta SPRITE4_Y
-  lda SPRITE_X_MSB
-  and #%11101111
-  ldx player_x_hi
-  beq store_player_reused_slot2_msb_done
-  lda SPRITE_X_MSB
-  and #%11101111
-  ora #FORMATION_SLOT2_MASK
-store_player_reused_slot2_msb_done:
-  sta SPRITE_X_MSB
-  lda player_reuse_pointer
-  sta SPRITE_POINTERS + 4
-  lda player_reuse_color
-  sta SPRITE4_COLOR
-  lda SPRITE_MULTICOLOR
-  and #%11101111
-  sta SPRITE_MULTICOLOR
-  lda SPRITE_ENABLE
-  ora #FORMATION_SLOT2_MASK
-  sta SPRITE_ENABLE
-  rts
-
-store_player_reused_slot3:
-  lda player_x_lo
-  sta SPRITE5_X
-  lda #PLAYER_Y
-  sta SPRITE5_Y
-  lda SPRITE_X_MSB
-  and #%11011111
-  ldx player_x_hi
-  beq store_player_reused_slot3_msb_done
-  lda SPRITE_X_MSB
-  and #%11011111
-  ora #FORMATION_SLOT3_MASK
-store_player_reused_slot3_msb_done:
-  sta SPRITE_X_MSB
-  lda player_reuse_pointer
-  sta SPRITE_POINTERS + 5
-  lda player_reuse_color
-  sta SPRITE5_COLOR
-  lda SPRITE_MULTICOLOR
-  and #%11011111
-  sta SPRITE_MULTICOLOR
-  lda SPRITE_ENABLE
-  ora #FORMATION_SLOT3_MASK
-  sta SPRITE_ENABLE
-  rts
-
-store_player_reused_slot4:
-  lda player_x_lo
-  sta SPRITE6_X
-  lda #PLAYER_Y
-  sta SPRITE6_Y
-  lda SPRITE_X_MSB
-  and #%10111111
-  ldx player_x_hi
-  beq store_player_reused_slot4_msb_done
-  lda SPRITE_X_MSB
-  and #%10111111
-  ora #FORMATION_SLOT4_MASK
-store_player_reused_slot4_msb_done:
-  sta SPRITE_X_MSB
-  lda player_reuse_pointer
-  sta SPRITE_POINTERS + 6
-  lda player_reuse_color
-  sta SPRITE6_COLOR
-  lda SPRITE_MULTICOLOR
-  and #%10111111
-  sta SPRITE_MULTICOLOR
-  lda SPRITE_ENABLE
-  ora #FORMATION_SLOT4_MASK
-  sta SPRITE_ENABLE
-  rts
-
-store_player_reused_slot5:
-  lda player_x_lo
-  sta SPRITE7_X
-  lda #PLAYER_Y
-  sta SPRITE7_Y
-  lda SPRITE_X_MSB
-  and #%01111111
-  ldx player_x_hi
-  beq store_player_reused_slot5_msb_done
-  lda SPRITE_X_MSB
-  and #%01111111
-  ora #FORMATION_SLOT5_MASK
-store_player_reused_slot5_msb_done:
-  sta SPRITE_X_MSB
-  lda player_reuse_pointer
-  sta SPRITE_POINTERS + 7
-  lda player_reuse_color
-  sta SPRITE7_COLOR
-  lda SPRITE_MULTICOLOR
-  and #%01111111
-  sta SPRITE_MULTICOLOR
-  lda SPRITE_ENABLE
-  ora #FORMATION_SLOT5_MASK
-  sta SPRITE_ENABLE
-  rts
-
-store_player_explosion_reused_slot:
-  txa
-  bne store_player_explosion_reused_slot_check1
-  jmp store_player_explosion_reused_slot0
-store_player_explosion_reused_slot_check1:
-  cmp #$01
-  bne store_player_explosion_reused_slot_check2
-  jmp store_player_explosion_reused_slot1
-store_player_explosion_reused_slot_check2:
-  cmp #$02
-  bne store_player_explosion_reused_slot_check3
-  jmp store_player_explosion_reused_slot2
-store_player_explosion_reused_slot_check3:
-  cmp #$03
-  bne store_player_explosion_reused_slot_check4
-  jmp store_player_explosion_reused_slot3
-store_player_explosion_reused_slot_check4:
-  cmp #$04
-  bne store_player_explosion_reused_slot_check5
-  jmp store_player_explosion_reused_slot4
-store_player_explosion_reused_slot_check5:
-  jmp store_player_explosion_reused_slot5
-
-store_player_explosion_reused_slot0:
-  lda player_effect_x_lo
-  sta SPRITE0_X
-  lda player_effect_y
-  sta SPRITE0_Y
-  lda SPRITE_X_MSB
-  and #%11111110
-  ldy player_effect_x_hi
-  beq store_player_explosion_reused_slot0_msb_done
-  ora #FORMATION_SLOT0_MASK
-store_player_explosion_reused_slot0_msb_done:
-  sta SPRITE_X_MSB
-  lda player_effect_pointer
-  sta SPRITE_POINTERS
-  lda player_effect_color
-  sta SPRITE0_COLOR
-  lda SPRITE_MULTICOLOR
-  ora #FORMATION_SLOT0_MASK
-  sta SPRITE_MULTICOLOR
-  lda SPRITE_ENABLE
-  ora #FORMATION_SLOT0_MASK
-  sta SPRITE_ENABLE
-  rts
-
-store_player_explosion_reused_slot1:
-  lda player_effect_x_lo
-  sta SPRITE3_X
-  lda player_effect_y
-  sta SPRITE3_Y
-  lda SPRITE_X_MSB
-  and #%11110111
-  ldy player_effect_x_hi
-  beq store_player_explosion_reused_slot1_msb_done
-  ora #FORMATION_SLOT1_MASK
-store_player_explosion_reused_slot1_msb_done:
-  sta SPRITE_X_MSB
-  lda player_effect_pointer
-  sta SPRITE_POINTERS + 3
-  lda player_effect_color
-  sta SPRITE3_COLOR
-  lda SPRITE_MULTICOLOR
-  ora #FORMATION_SLOT1_MASK
-  sta SPRITE_MULTICOLOR
-  lda SPRITE_ENABLE
-  ora #FORMATION_SLOT1_MASK
-  sta SPRITE_ENABLE
-  rts
-
-store_player_explosion_reused_slot2:
-  lda player_effect_x_lo
-  sta SPRITE4_X
-  lda player_effect_y
-  sta SPRITE4_Y
-  lda SPRITE_X_MSB
-  and #%11101111
-  ldy player_effect_x_hi
-  beq store_player_explosion_reused_slot2_msb_done
-  ora #FORMATION_SLOT2_MASK
-store_player_explosion_reused_slot2_msb_done:
-  sta SPRITE_X_MSB
-  lda player_effect_pointer
-  sta SPRITE_POINTERS + 4
-  lda player_effect_color
-  sta SPRITE4_COLOR
-  lda SPRITE_MULTICOLOR
-  ora #FORMATION_SLOT2_MASK
-  sta SPRITE_MULTICOLOR
-  lda SPRITE_ENABLE
-  ora #FORMATION_SLOT2_MASK
-  sta SPRITE_ENABLE
-  rts
-
-store_player_explosion_reused_slot3:
-  lda player_effect_x_lo
-  sta SPRITE5_X
-  lda player_effect_y
-  sta SPRITE5_Y
-  lda SPRITE_X_MSB
-  and #%11011111
-  ldy player_effect_x_hi
-  beq store_player_explosion_reused_slot3_msb_done
-  ora #FORMATION_SLOT3_MASK
-store_player_explosion_reused_slot3_msb_done:
-  sta SPRITE_X_MSB
-  lda player_effect_pointer
-  sta SPRITE_POINTERS + 5
-  lda player_effect_color
-  sta SPRITE5_COLOR
-  lda SPRITE_MULTICOLOR
-  ora #FORMATION_SLOT3_MASK
-  sta SPRITE_MULTICOLOR
-  lda SPRITE_ENABLE
-  ora #FORMATION_SLOT3_MASK
-  sta SPRITE_ENABLE
-  rts
-
-store_player_explosion_reused_slot4:
-  lda player_effect_x_lo
-  sta SPRITE6_X
-  lda player_effect_y
-  sta SPRITE6_Y
-  lda SPRITE_X_MSB
-  and #%10111111
-  ldy player_effect_x_hi
-  beq store_player_explosion_reused_slot4_msb_done
-  ora #FORMATION_SLOT4_MASK
-store_player_explosion_reused_slot4_msb_done:
-  sta SPRITE_X_MSB
-  lda player_effect_pointer
-  sta SPRITE_POINTERS + 6
-  lda player_effect_color
-  sta SPRITE6_COLOR
-  lda SPRITE_MULTICOLOR
-  ora #FORMATION_SLOT4_MASK
-  sta SPRITE_MULTICOLOR
-  lda SPRITE_ENABLE
-  ora #FORMATION_SLOT4_MASK
-  sta SPRITE_ENABLE
-  rts
-
-store_player_explosion_reused_slot5:
-  lda player_effect_x_lo
-  sta SPRITE7_X
-  lda player_effect_y
-  sta SPRITE7_Y
-  lda SPRITE_X_MSB
-  and #%01111111
-  ldy player_effect_x_hi
-  beq store_player_explosion_reused_slot5_msb_done
-  ora #FORMATION_SLOT5_MASK
-store_player_explosion_reused_slot5_msb_done:
-  sta SPRITE_X_MSB
-  lda player_effect_pointer
-  sta SPRITE_POINTERS + 7
-  lda player_effect_color
-  sta SPRITE7_COLOR
-  lda SPRITE_MULTICOLOR
-  ora #FORMATION_SLOT5_MASK
-  sta SPRITE_MULTICOLOR
-  lda SPRITE_ENABLE
-  ora #FORMATION_SLOT5_MASK
-  sta SPRITE_ENABLE
-  rts
-
 render_formation:
-  lda formation_renderer_mode
-  cmp #FORMATION_RENDERER_MODE_SPRITE
-  beq render_formation_sprite
-  jmp render_formation_char
-
-render_formation_sprite:
-  ldx #$00
-  jsr render_formation_sprite_slot
-  ldx #$01
-  jsr render_formation_sprite_slot
-  ldx #$02
-  jsr render_formation_sprite_slot
-  ldx #$03
-  jsr render_formation_sprite_slot
-  ldx #$04
-  jsr render_formation_sprite_slot
-  ldx #$05
-  jsr render_formation_sprite_slot
-  rts
-
-render_formation_sprite_slot:
-  lda dive_active
-  beq render_formation_sprite_check_explosion
-  cpx dive_slot
-  bne render_formation_sprite_check_explosion
-  jsr store_dive_position
-  rts
-
-render_formation_sprite_check_explosion:
-  lda slot_explosion_timer, x
-  beq render_formation_sprite_check_alive
-  txa
-  jsr set_slot_explosion_frame
-  rts
-
-render_formation_sprite_check_alive:
-  lda formation_slot0_alive, x
-  beq render_formation_sprite_disable
-  txa
-  bne render_formation_sprite_alive_check1
-  jmp render_formation_sprite_slot0
-render_formation_sprite_alive_check1:
-  cmp #$01
-  bne render_formation_sprite_alive_check2
-  jmp render_formation_sprite_slot1
-render_formation_sprite_alive_check2:
-  cmp #$02
-  bne render_formation_sprite_alive_check3
-  jmp render_formation_sprite_slot2
-render_formation_sprite_alive_check3:
-  cmp #$03
-  bne render_formation_sprite_alive_check4
-  jmp render_formation_sprite_slot3
-render_formation_sprite_alive_check4:
-  cmp #$04
-  bne render_formation_sprite_alive_check5
-  jmp render_formation_sprite_slot4
-render_formation_sprite_alive_check5:
-  jmp render_formation_sprite_slot5
-
-render_formation_sprite_disable:
-  txa
-  bne render_formation_sprite_disable_check1
-  jmp disable_formation_sprite_slot0
-render_formation_sprite_disable_check1:
-  cmp #$01
-  bne render_formation_sprite_disable_check2
-  jmp disable_formation_sprite_slot1
-render_formation_sprite_disable_check2:
-  cmp #$02
-  bne render_formation_sprite_disable_check3
-  jmp disable_formation_sprite_slot2
-render_formation_sprite_disable_check3:
-  cmp #$03
-  bne render_formation_sprite_disable_check4
-  jmp disable_formation_sprite_slot3
-render_formation_sprite_disable_check4:
-  cmp #$04
-  bne render_formation_sprite_disable_check5
-  jmp disable_formation_sprite_slot4
-render_formation_sprite_disable_check5:
-  jmp disable_formation_sprite_slot5
-
-render_formation_sprite_slot0:
-  lda formation_slot0_x_lo
-  sta SPRITE0_X
-  lda #FORMATION_TOP_Y
-  sta SPRITE0_Y
-  lda SPRITE_X_MSB
-  and #%11111110
-  ldx formation_slot0_x_hi
-  beq render_formation_sprite_slot0_msb_done
-  ora #FORMATION_SLOT0_MASK
-render_formation_sprite_slot0_msb_done:
-  sta SPRITE_X_MSB
-  ldy formation_anim_index
-  lda flagship_animation_sequence, y
-  sta SPRITE_POINTERS
-  lda #FLAGSHIP_COLOR
-  sta SPRITE0_COLOR
-  lda SPRITE_MULTICOLOR
-  ora #FORMATION_SLOT0_MASK
-  sta SPRITE_MULTICOLOR
-  lda SPRITE_ENABLE
-  ora #FORMATION_SLOT0_MASK
-  sta SPRITE_ENABLE
-  rts
-
-render_formation_sprite_slot1:
-  lda formation_slot1_x_lo
-  sta SPRITE3_X
-  lda #FORMATION_TOP_Y
-  sta SPRITE3_Y
-  lda SPRITE_X_MSB
-  and #%11110111
-  ldx formation_slot1_x_hi
-  beq render_formation_sprite_slot1_msb_done
-  ora #FORMATION_SLOT1_MASK
-render_formation_sprite_slot1_msb_done:
-  sta SPRITE_X_MSB
-  ldy formation_anim_index
-  lda flagship_animation_sequence, y
-  sta SPRITE_POINTERS + 3
-  lda #FLAGSHIP_COLOR
-  sta SPRITE3_COLOR
-  lda SPRITE_MULTICOLOR
-  ora #FORMATION_SLOT1_MASK
-  sta SPRITE_MULTICOLOR
-  lda SPRITE_ENABLE
-  ora #FORMATION_SLOT1_MASK
-  sta SPRITE_ENABLE
-  rts
-
-render_formation_sprite_slot2:
-  lda formation_slot2_x_lo
-  sta SPRITE4_X
-  lda #FORMATION_MID_Y
-  sta SPRITE4_Y
-  lda SPRITE_X_MSB
-  and #%11101111
-  ldx formation_slot2_x_hi
-  beq render_formation_sprite_slot2_msb_done
-  ora #FORMATION_SLOT2_MASK
-render_formation_sprite_slot2_msb_done:
-  sta SPRITE_X_MSB
-  ldy formation_anim_index
-  lda escort_animation_sequence, y
-  sta SPRITE_POINTERS + 4
-  lda #ESCORT_COLOR
-  sta SPRITE4_COLOR
-  lda SPRITE_MULTICOLOR
-  ora #FORMATION_SLOT2_MASK
-  sta SPRITE_MULTICOLOR
-  lda SPRITE_ENABLE
-  ora #FORMATION_SLOT2_MASK
-  sta SPRITE_ENABLE
-  rts
-
-render_formation_sprite_slot3:
-  lda formation_slot3_x_lo
-  sta SPRITE5_X
-  lda #FORMATION_MID_Y
-  sta SPRITE5_Y
-  lda SPRITE_X_MSB
-  and #%11011111
-  ldx formation_slot3_x_hi
-  beq render_formation_sprite_slot3_msb_done
-  ora #FORMATION_SLOT3_MASK
-render_formation_sprite_slot3_msb_done:
-  sta SPRITE_X_MSB
-  ldy formation_anim_index
-  lda escort_animation_sequence, y
-  sta SPRITE_POINTERS + 5
-  lda #ESCORT_COLOR
-  sta SPRITE5_COLOR
-  lda SPRITE_MULTICOLOR
-  ora #FORMATION_SLOT3_MASK
-  sta SPRITE_MULTICOLOR
-  lda SPRITE_ENABLE
-  ora #FORMATION_SLOT3_MASK
-  sta SPRITE_ENABLE
-  rts
-
-render_formation_sprite_slot4:
-  lda formation_slot4_x_lo
-  sta SPRITE6_X
-  lda #FORMATION_BOTTOM_Y
-  sta SPRITE6_Y
-  lda SPRITE_X_MSB
-  and #%10111111
-  ldx formation_slot4_x_hi
-  beq render_formation_sprite_slot4_msb_done
-  ora #FORMATION_SLOT4_MASK
-render_formation_sprite_slot4_msb_done:
-  sta SPRITE_X_MSB
-  ldy formation_anim_index
-  lda grunt_animation_sequence, y
-  sta SPRITE_POINTERS + 6
-  lda #GRUNT_COLOR
-  sta SPRITE6_COLOR
-  lda SPRITE_MULTICOLOR
-  ora #FORMATION_SLOT4_MASK
-  sta SPRITE_MULTICOLOR
-  lda SPRITE_ENABLE
-  ora #FORMATION_SLOT4_MASK
-  sta SPRITE_ENABLE
-  rts
-
-render_formation_sprite_slot5:
-  lda formation_slot5_x_lo
-  sta SPRITE7_X
-  lda #FORMATION_BOTTOM_Y
-  sta SPRITE7_Y
-  lda SPRITE_X_MSB
-  and #%01111111
-  ldx formation_slot5_x_hi
-  beq render_formation_sprite_slot5_msb_done
-  ora #FORMATION_SLOT5_MASK
-render_formation_sprite_slot5_msb_done:
-  sta SPRITE_X_MSB
-  ldy formation_anim_index
-  lda grunt_animation_sequence, y
-  sta SPRITE_POINTERS + 7
-  lda #GRUNT_COLOR
-  sta SPRITE7_COLOR
-  lda SPRITE_MULTICOLOR
-  ora #FORMATION_SLOT5_MASK
-  sta SPRITE_MULTICOLOR
-  lda SPRITE_ENABLE
-  ora #FORMATION_SLOT5_MASK
-  sta SPRITE_ENABLE
-  rts
-
-disable_formation_sprite_slot0:
-  lda SPRITE_ENABLE
-  and #%11111110
-  sta SPRITE_ENABLE
-  rts
-
-disable_formation_sprite_slot1:
-  lda SPRITE_ENABLE
-  and #%11110111
-  sta SPRITE_ENABLE
-  rts
-
-disable_formation_sprite_slot2:
-  lda SPRITE_ENABLE
-  and #%11101111
-  sta SPRITE_ENABLE
-  rts
-
-disable_formation_sprite_slot3:
-  lda SPRITE_ENABLE
-  and #%11011111
-  sta SPRITE_ENABLE
-  rts
-
-disable_formation_sprite_slot4:
-  lda SPRITE_ENABLE
-  and #%10111111
-  sta SPRITE_ENABLE
-  rts
-
-disable_formation_sprite_slot5:
-  lda SPRITE_ENABLE
-  and #%01111111
-  sta SPRITE_ENABLE
-  rts
-
-render_formation_char:
   lda #$00
   sta formation_char_render_mask_pending
   ldx #$00
-render_formation_char_clear_previous_loop:
+render_formation_clear_previous_loop:
   lda formation_char_render_mask
   and formation_char_render_bit_table, x
-  beq render_formation_char_clear_previous_next
+  beq render_formation_clear_previous_next
   jsr clear_formation_char_slot_saved
-render_formation_char_clear_previous_next:
+render_formation_clear_previous_next:
   inx
   cpx #$06
-  bcc render_formation_char_clear_previous_loop
+  bcc render_formation_clear_previous_loop
   ldx #$00
   jsr render_formation_char_slot0_state
   ldx #$01
@@ -3918,11 +2839,10 @@ render_formation_char_slot1_check_explosion:
   sta formation_char_slot_x_hi
   ldy #FORMATION_CHAR_BAND_TOP_ROW
   jsr clear_formation_char_slot_screen
-  jmp disable_formation_sprite_slot1
+  rts
 render_formation_char_slot1_check_alive:
   lda formation_slot1_alive
   beq render_formation_char_slot1_disable
-  jsr disable_formation_sprite_slot1
   jmp draw_formation_char_slot1
 render_formation_char_slot1_dive:
   lda formation_slot1_x_lo
@@ -3931,9 +2851,9 @@ render_formation_char_slot1_dive:
   sta formation_char_slot_x_hi
   ldy #FORMATION_CHAR_BAND_TOP_ROW
   jsr clear_formation_char_slot_screen
-  jmp disable_formation_sprite_slot1
+  rts
 render_formation_char_slot1_disable:
-  jmp disable_formation_sprite_slot1
+  rts
 
 render_formation_char_slot2_state:
   lda dive_active
@@ -3950,11 +2870,10 @@ render_formation_char_slot2_check_explosion:
   sta formation_char_slot_x_hi
   ldy #FORMATION_CHAR_BAND_MID_ROW
   jsr clear_formation_char_slot_screen
-  jmp disable_formation_sprite_slot2
+  rts
 render_formation_char_slot2_check_alive:
   lda formation_slot2_alive
   beq render_formation_char_slot2_disable
-  jsr disable_formation_sprite_slot2
   jmp draw_formation_char_slot2
 render_formation_char_slot2_dive:
   lda formation_slot2_x_lo
@@ -3963,9 +2882,9 @@ render_formation_char_slot2_dive:
   sta formation_char_slot_x_hi
   ldy #FORMATION_CHAR_BAND_MID_ROW
   jsr clear_formation_char_slot_screen
-  jmp disable_formation_sprite_slot2
+  rts
 render_formation_char_slot2_disable:
-  jmp disable_formation_sprite_slot2
+  rts
 
 render_formation_char_slot3_state:
   lda dive_active
@@ -3982,11 +2901,10 @@ render_formation_char_slot3_check_explosion:
   sta formation_char_slot_x_hi
   ldy #FORMATION_CHAR_BAND_MID_ROW
   jsr clear_formation_char_slot_screen
-  jmp disable_formation_sprite_slot3
+  rts
 render_formation_char_slot3_check_alive:
   lda formation_slot3_alive
   beq render_formation_char_slot3_disable
-  jsr disable_formation_sprite_slot3
   jmp draw_formation_char_slot3
 render_formation_char_slot3_dive:
   lda formation_slot3_x_lo
@@ -3995,9 +2913,9 @@ render_formation_char_slot3_dive:
   sta formation_char_slot_x_hi
   ldy #FORMATION_CHAR_BAND_MID_ROW
   jsr clear_formation_char_slot_screen
-  jmp disable_formation_sprite_slot3
+  rts
 render_formation_char_slot3_disable:
-  jmp disable_formation_sprite_slot3
+  rts
 
 render_formation_char_slot4_state:
   lda dive_active
@@ -4014,11 +2932,10 @@ render_formation_char_slot4_check_explosion:
   sta formation_char_slot_x_hi
   ldy #FORMATION_CHAR_BAND_BOTTOM_ROW
   jsr clear_formation_char_slot_screen
-  jmp disable_formation_sprite_slot4
+  rts
 render_formation_char_slot4_check_alive:
   lda formation_slot4_alive
   beq render_formation_char_slot4_disable
-  jsr disable_formation_sprite_slot4
   jmp draw_formation_char_slot4
 render_formation_char_slot4_dive:
   lda formation_slot4_x_lo
@@ -4027,9 +2944,9 @@ render_formation_char_slot4_dive:
   sta formation_char_slot_x_hi
   ldy #FORMATION_CHAR_BAND_BOTTOM_ROW
   jsr clear_formation_char_slot_screen
-  jmp disable_formation_sprite_slot4
+  rts
 render_formation_char_slot4_disable:
-  jmp disable_formation_sprite_slot4
+  rts
 
 render_formation_char_slot5_state:
   lda dive_active
@@ -4046,11 +2963,10 @@ render_formation_char_slot5_check_explosion:
   sta formation_char_slot_x_hi
   ldy #FORMATION_CHAR_BAND_BOTTOM_ROW
   jsr clear_formation_char_slot_screen
-  jmp disable_formation_sprite_slot5
+  rts
 render_formation_char_slot5_check_alive:
   lda formation_slot5_alive
   beq render_formation_char_slot5_disable
-  jsr disable_formation_sprite_slot5
   jmp draw_formation_char_slot5
 render_formation_char_slot5_dive:
   lda formation_slot5_x_lo
@@ -4059,9 +2975,9 @@ render_formation_char_slot5_dive:
   sta formation_char_slot_x_hi
   ldy #FORMATION_CHAR_BAND_BOTTOM_ROW
   jsr clear_formation_char_slot_screen
-  jmp disable_formation_sprite_slot5
+  rts
 render_formation_char_slot5_disable:
-  jmp disable_formation_sprite_slot5
+  rts
 
 draw_formation_char_slot0:
   ldy formation_anim_index
@@ -4480,6 +3396,8 @@ dive_launch_counter:
   .byte $00
 dive_launch_y_debug:
   .byte $00
+dive_launch_hold:
+  .byte $00
 player_x_lo:
   .byte PLAYER_START_X_LO
 player_x_hi:
@@ -4487,14 +3405,6 @@ player_x_hi:
 player_visible:
   .byte $00
 player_lives:
-  .byte $00
-player_white_slot:
-  .byte $00
-player_cyan_slot:
-  .byte $01
-player_reuse_pointer:
-  .byte $00
-player_reuse_color:
   .byte $00
 player_effect_x_lo:
   .byte $00
@@ -4514,10 +3424,6 @@ player_bottom_sprite_mask_debug:
   .byte $00
 formation_anim_index:
   .byte $00
-formation_renderer_mode:
-  .byte $00
-formation_renderer_requested_mode:
-  .byte FORMATION_DEFAULT_RENDERER_MODE
 formation_shift_phase:
   .byte $00
 frame_capture_counter:
@@ -4671,15 +3577,15 @@ escort_animation_sequence:
 grunt_animation_sequence:
   .byte GRUNT_SPRITE0_PTR,GRUNT_SPRITE1_PTR,GRUNT_SPRITE0_PTR,GRUNT_SPRITE1_PTR
 flagship_dive_animation_sequence:
-  .byte FLAGSHIP_SPRITE2_PTR,ARCADE_SPRITE_PTR_BASE + 9,ARCADE_SPRITE_PTR_BASE + 10,ARCADE_SPRITE_PTR_BASE + 11,ARCADE_SPRITE_PTR_BASE + 12,ARCADE_SPRITE_PTR_BASE + 13,ARCADE_SPRITE_PTR_BASE + 14,ARCADE_SPRITE_PTR_BASE + 15,ARCADE_SPRITE_PTR_BASE + 16,ARCADE_SPRITE_PTR_BASE + 17
+  .byte FLAGSHIP_SPRITE0_PTR,ARCADE_SPRITE_PTR_BASE + 9,ARCADE_SPRITE_PTR_BASE + 10,ARCADE_SPRITE_PTR_BASE + 11,ARCADE_SPRITE_PTR_BASE + 12,ARCADE_SPRITE_PTR_BASE + 13,ARCADE_SPRITE_PTR_BASE + 14,ARCADE_SPRITE_PTR_BASE + 15,ARCADE_SPRITE_PTR_BASE + 16,ARCADE_SPRITE_PTR_BASE + 17
 flagship_dive_animation_colors:
   .byte FLAGSHIP_COLOR,FLAGSHIP_DIVE_COLOR,FLAGSHIP_DIVE_COLOR,FLAGSHIP_DIVE_COLOR,FLAGSHIP_DIVE_COLOR,FLAGSHIP_DIVE_COLOR,FLAGSHIP_DIVE_COLOR,FLAGSHIP_DIVE_COLOR,FLAGSHIP_DIVE_COLOR,FLAGSHIP_DIVE_COLOR
 escort_dive_animation_sequence:
-  .byte FLAGSHIP_SPRITE0_PTR,ARCADE_SPRITE_PTR_BASE + 18,ARCADE_SPRITE_PTR_BASE + 19,ARCADE_SPRITE_PTR_BASE + 20,ARCADE_SPRITE_PTR_BASE + 21,ARCADE_SPRITE_PTR_BASE + 22,ARCADE_SPRITE_PTR_BASE + 23,ARCADE_SPRITE_PTR_BASE + 24,ARCADE_SPRITE_PTR_BASE + 25,ARCADE_SPRITE_PTR_BASE + 26
+  .byte ESCORT_SPRITE0_PTR,ARCADE_SPRITE_PTR_BASE + 18,ARCADE_SPRITE_PTR_BASE + 19,ARCADE_SPRITE_PTR_BASE + 20,ARCADE_SPRITE_PTR_BASE + 21,ARCADE_SPRITE_PTR_BASE + 22,ARCADE_SPRITE_PTR_BASE + 23,ARCADE_SPRITE_PTR_BASE + 24,ARCADE_SPRITE_PTR_BASE + 25,ARCADE_SPRITE_PTR_BASE + 26
 escort_dive_animation_colors:
-  .byte FLAGSHIP_COLOR,ESCORT_DIVE_COLOR,ESCORT_DIVE_COLOR,ESCORT_DIVE_COLOR,ESCORT_DIVE_COLOR,ESCORT_DIVE_COLOR,ESCORT_DIVE_COLOR,ESCORT_DIVE_COLOR,ESCORT_DIVE_COLOR,ESCORT_DIVE_COLOR
+  .byte ESCORT_COLOR,ESCORT_DIVE_COLOR,ESCORT_DIVE_COLOR,ESCORT_DIVE_COLOR,ESCORT_DIVE_COLOR,ESCORT_DIVE_COLOR,ESCORT_DIVE_COLOR,ESCORT_DIVE_COLOR,ESCORT_DIVE_COLOR,ESCORT_DIVE_COLOR
 grunt_dive_animation_sequence:
-  .byte GRUNT_SPRITE2_PTR,ARCADE_SPRITE_PTR_BASE + 27,ARCADE_SPRITE_PTR_BASE + 28,ARCADE_SPRITE_PTR_BASE + 29,ARCADE_SPRITE_PTR_BASE + 30,ARCADE_SPRITE_PTR_BASE + 31,ARCADE_SPRITE_PTR_BASE + 32,ARCADE_SPRITE_PTR_BASE + 33,ARCADE_SPRITE_PTR_BASE + 34,ARCADE_SPRITE_PTR_BASE + 35
+  .byte GRUNT_SPRITE0_PTR,ARCADE_SPRITE_PTR_BASE + 27,ARCADE_SPRITE_PTR_BASE + 28,ARCADE_SPRITE_PTR_BASE + 29,ARCADE_SPRITE_PTR_BASE + 30,ARCADE_SPRITE_PTR_BASE + 31,ARCADE_SPRITE_PTR_BASE + 32,ARCADE_SPRITE_PTR_BASE + 33,ARCADE_SPRITE_PTR_BASE + 34,ARCADE_SPRITE_PTR_BASE + 35
 grunt_dive_animation_colors:
   .byte GRUNT_COLOR,GRUNT_DIVE_COLOR,GRUNT_DIVE_COLOR,GRUNT_DIVE_COLOR,GRUNT_DIVE_COLOR,GRUNT_DIVE_COLOR,GRUNT_DIVE_COLOR,GRUNT_DIVE_COLOR,GRUNT_DIVE_COLOR,GRUNT_DIVE_COLOR
 enemy_explosion_sequence:
@@ -4688,12 +3594,12 @@ formation_char_band_rows:
   .byte FORMATION_CHAR_BAND_TOP_ROW,FORMATION_CHAR_BAND_TOP_ROW + 1,FORMATION_CHAR_BAND_MID_ROW,FORMATION_CHAR_BAND_MID_ROW + 1,FORMATION_CHAR_BAND_BOTTOM_ROW
 formation_char_row_table:
   .byte FORMATION_CHAR_BAND_TOP_ROW,FORMATION_CHAR_BAND_TOP_ROW,FORMATION_CHAR_BAND_MID_ROW,FORMATION_CHAR_BAND_MID_ROW,FORMATION_CHAR_BAND_BOTTOM_ROW,FORMATION_CHAR_BAND_BOTTOM_ROW
-formation_slot_sprite_y_table:
-  .byte FORMATION_TOP_Y,FORMATION_TOP_Y,FORMATION_MID_Y,FORMATION_MID_Y,FORMATION_BOTTOM_Y,FORMATION_BOTTOM_Y
-formation_slot_char_y_table:
+formation_slot_visual_y_table:
   .byte FORMATION_CHAR_TOP_Y,FORMATION_CHAR_TOP_Y,FORMATION_CHAR_MID_Y,FORMATION_CHAR_MID_Y,FORMATION_CHAR_BOTTOM_Y,FORMATION_CHAR_BOTTOM_Y
 formation_char_render_bit_table:
   .byte %00000001,%00000010,%00000100,%00001000,%00010000,%00100000
+formation_char_clear_bit_table:
+  .byte %11111110,%11111101,%11111011,%11110111,%11101111,%11011111
 formation_char_color_table:
   .byte FLAGSHIP_COLOR,FLAGSHIP_COLOR,ESCORT_COLOR,ESCORT_COLOR,GRUNT_COLOR,GRUNT_COLOR
 flagship_char_animation_sequence:
@@ -4738,58 +3644,18 @@ color_row_hi:
 * = $4f40 "Char Mode Sprite Routines"
 
 load_slot_visual_y:
-  lda formation_renderer_mode
-  cmp #FORMATION_RENDERER_MODE_CHAR
-  beq load_slot_visual_y_char
-  lda formation_slot_sprite_y_table, x
-  rts
-load_slot_visual_y_char:
-  lda formation_slot_char_y_table, x
+  lda formation_slot_visual_y_table, x
   rts
 
-restore_dive_slot_y:
-  lda dive_slot
-  beq restore_dive_slot0_y
-  cmp #$01
-  beq restore_dive_slot1_y
-  cmp #$02
-  beq restore_dive_slot2_y
-  cmp #$03
-  beq restore_dive_slot3_y
-  cmp #$04
-  beq restore_dive_slot4_y
-  cmp #$05
-  beq restore_dive_slot5_y
-  rts
-
-restore_dive_slot0_y:
-  lda #FORMATION_TOP_Y
-  sta SPRITE0_Y
-  rts
-
-restore_dive_slot1_y:
-  lda #FORMATION_TOP_Y
-  sta SPRITE3_Y
-  rts
-
-restore_dive_slot2_y:
-  lda #FORMATION_MID_Y
-  sta SPRITE4_Y
-  rts
-
-restore_dive_slot3_y:
-  lda #FORMATION_MID_Y
-  sta SPRITE5_Y
-  rts
-
-restore_dive_slot4_y:
-  lda #FORMATION_BOTTOM_Y
-  sta SPRITE6_Y
-  rts
-
-restore_dive_slot5_y:
-  lda #FORMATION_BOTTOM_Y
-  sta SPRITE7_Y
+clear_dive_slot_char_handoff:
+  ldx dive_slot
+  jsr clear_formation_char_slot_saved
+  lda formation_char_render_mask
+  and formation_char_clear_bit_table, x
+  sta formation_char_render_mask
+  lda formation_char_render_mask_pending
+  and formation_char_clear_bit_table, x
+  sta formation_char_render_mask_pending
   rts
 
 draw_player_extra_layers_char:
@@ -4976,9 +3842,6 @@ store_char_mode_player_explosion_bottom_right_msb_done:
   rts
 
 disable_char_mode_dive_sprite:
-  lda formation_renderer_mode
-  cmp #FORMATION_RENDERER_MODE_CHAR
-  bne disable_char_mode_dive_sprite_done
   lda SPRITE_ENABLE
   and #%11111110
   sta SPRITE_ENABLE
@@ -4988,7 +3851,6 @@ disable_char_mode_dive_sprite:
   lda SPRITE_MULTICOLOR
   and #%11111110
   sta SPRITE_MULTICOLOR
-disable_char_mode_dive_sprite_done:
   rts
 
 disable_char_mode_dynamic_sprites:
@@ -5367,186 +4229,6 @@ player_explosion_sprites:
   .import binary "generated_player_explosion.bin"
 
 * = $4b00 "Explosion Frame Routines"
-
-set_slot_explosion_frame:
-  lda formation_renderer_mode
-  cmp #FORMATION_RENDERER_MODE_CHAR
-  beq set_slot_explosion_skip
-  tax
-  jsr slot_reserved_for_player_bottom
-  bcs set_slot_explosion_skip
-  ldy slot_explosion_frame, x
-  lda enemy_explosion_sequence, y
-  sta enemy_explosion_pointer
-  txa
-  beq set_slot_explosion_frame0
-  cmp #$01
-  beq set_slot_explosion_frame1
-  cmp #$02
-  beq set_slot_explosion_frame2
-  cmp #$03
-  beq set_slot_explosion_frame3
-  cmp #$04
-  beq set_slot_explosion_frame4
-  jmp set_slot_explosion_frame5
-set_slot_explosion_frame0:
-  jmp set_slot0_explosion_frame
-set_slot_explosion_frame1:
-  jmp set_slot1_explosion_frame
-set_slot_explosion_frame2:
-  jmp set_slot2_explosion_frame
-set_slot_explosion_frame3:
-  jmp set_slot3_explosion_frame
-set_slot_explosion_frame4:
-  jmp set_slot4_explosion_frame
-set_slot_explosion_frame5:
-  jmp set_slot5_explosion_frame
-set_slot_explosion_skip:
-  rts
-
-set_slot0_explosion_frame:
-  lda explosion_slot_x_lo, x
-  sta SPRITE0_X
-  lda explosion_slot_y, x
-  sta SPRITE0_Y
-  lda SPRITE_X_MSB
-  and #%11111110
-  ldy explosion_slot_x_hi, x
-  beq set_slot0_explosion_msb_done
-  ora #FORMATION_SLOT0_MASK
-set_slot0_explosion_msb_done:
-  sta SPRITE_X_MSB
-  lda SPRITE_MULTICOLOR
-  and #%11111110
-  sta SPRITE_MULTICOLOR
-  lda enemy_explosion_pointer
-  sta SPRITE_POINTERS
-  lda #ENEMY_EXPLOSION_COLOR
-  sta SPRITE0_COLOR
-  lda SPRITE_ENABLE
-  ora #FORMATION_SLOT0_MASK
-  sta SPRITE_ENABLE
-  rts
-
-set_slot1_explosion_frame:
-  lda explosion_slot_x_lo, x
-  sta SPRITE3_X
-  lda explosion_slot_y, x
-  sta SPRITE3_Y
-  lda SPRITE_X_MSB
-  and #%11110111
-  ldy explosion_slot_x_hi, x
-  beq set_slot1_explosion_msb_done
-  ora #FORMATION_SLOT1_MASK
-set_slot1_explosion_msb_done:
-  sta SPRITE_X_MSB
-  lda SPRITE_MULTICOLOR
-  and #%11110111
-  sta SPRITE_MULTICOLOR
-  lda enemy_explosion_pointer
-  sta SPRITE_POINTERS + 3
-  lda #ENEMY_EXPLOSION_COLOR
-  sta SPRITE3_COLOR
-  lda SPRITE_ENABLE
-  ora #FORMATION_SLOT1_MASK
-  sta SPRITE_ENABLE
-  rts
-
-set_slot2_explosion_frame:
-  lda explosion_slot_x_lo, x
-  sta SPRITE4_X
-  lda explosion_slot_y, x
-  sta SPRITE4_Y
-  lda SPRITE_X_MSB
-  and #%11101111
-  ldy explosion_slot_x_hi, x
-  beq set_slot2_explosion_msb_done
-  ora #FORMATION_SLOT2_MASK
-set_slot2_explosion_msb_done:
-  sta SPRITE_X_MSB
-  lda SPRITE_MULTICOLOR
-  and #%11101111
-  sta SPRITE_MULTICOLOR
-  lda enemy_explosion_pointer
-  sta SPRITE_POINTERS + 4
-  lda #ENEMY_EXPLOSION_COLOR
-  sta SPRITE4_COLOR
-  lda SPRITE_ENABLE
-  ora #FORMATION_SLOT2_MASK
-  sta SPRITE_ENABLE
-  rts
-
-set_slot3_explosion_frame:
-  lda explosion_slot_x_lo, x
-  sta SPRITE5_X
-  lda explosion_slot_y, x
-  sta SPRITE5_Y
-  lda SPRITE_X_MSB
-  and #%11011111
-  ldy explosion_slot_x_hi, x
-  beq set_slot3_explosion_msb_done
-  ora #FORMATION_SLOT3_MASK
-set_slot3_explosion_msb_done:
-  sta SPRITE_X_MSB
-  lda SPRITE_MULTICOLOR
-  and #%11011111
-  sta SPRITE_MULTICOLOR
-  lda enemy_explosion_pointer
-  sta SPRITE_POINTERS + 5
-  lda #ENEMY_EXPLOSION_COLOR
-  sta SPRITE5_COLOR
-  lda SPRITE_ENABLE
-  ora #FORMATION_SLOT3_MASK
-  sta SPRITE_ENABLE
-  rts
-
-set_slot4_explosion_frame:
-  lda explosion_slot_x_lo, x
-  sta SPRITE6_X
-  lda explosion_slot_y, x
-  sta SPRITE6_Y
-  lda SPRITE_X_MSB
-  and #%10111111
-  ldy explosion_slot_x_hi, x
-  beq set_slot4_explosion_msb_done
-  ora #FORMATION_SLOT4_MASK
-set_slot4_explosion_msb_done:
-  sta SPRITE_X_MSB
-  lda SPRITE_MULTICOLOR
-  and #%10111111
-  sta SPRITE_MULTICOLOR
-  lda enemy_explosion_pointer
-  sta SPRITE_POINTERS + 6
-  lda #ENEMY_EXPLOSION_COLOR
-  sta SPRITE6_COLOR
-  lda SPRITE_ENABLE
-  ora #FORMATION_SLOT4_MASK
-  sta SPRITE_ENABLE
-  rts
-
-set_slot5_explosion_frame:
-  lda explosion_slot_x_lo, x
-  sta SPRITE7_X
-  lda explosion_slot_y, x
-  sta SPRITE7_Y
-  lda SPRITE_X_MSB
-  and #%01111111
-  ldy explosion_slot_x_hi, x
-  beq set_slot5_explosion_msb_done
-  ora #FORMATION_SLOT5_MASK
-set_slot5_explosion_msb_done:
-  sta SPRITE_X_MSB
-  lda SPRITE_MULTICOLOR
-  and #%01111111
-  sta SPRITE_MULTICOLOR
-  lda enemy_explosion_pointer
-  sta SPRITE_POINTERS + 7
-  lda #ENEMY_EXPLOSION_COLOR
-  sta SPRITE7_COLOR
-  lda SPRITE_ENABLE
-  ora #FORMATION_SLOT5_MASK
-  sta SPRITE_ENABLE
-  rts
 
 store_slot_explosion_position:
   tax

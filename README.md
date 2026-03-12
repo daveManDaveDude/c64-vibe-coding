@@ -125,7 +125,7 @@ make clean
 - `make debug-sprites`: print the generated enemy frames as ASCII and also regenerate the sprite previews
 - `make convert-sprites-png2prg`: normalize the first 3x3 enemy block from the full arcade sheet for `png2prg`, run the conversion row-by-row, and write `src/generated_enemy_sprites_png2prg.bin`
 
-The default assembly build now uses the character renderer for the in-formation enemy pack. For the temporary sprite fallback, set `FORMATION_RENDERER=sprite` when invoking the build or run target.
+The assembly build now uses the character renderer for the in-formation enemy pack. The temporary sprite-pack fallback has been removed.
 
 ## Sprite Workflow
 
