@@ -302,14 +302,6 @@ main_loop:
   jsr wait_frame
   lda #$00
   sta frame_capture_ready
-  lda formation_render_dirty
-  beq main_loop_render_done
-  jsr render_formation
-  lda #$00
-  sta formation_render_dirty
-main_loop_render_done:
-  lda #$01
-  sta frame_capture_ready
   jsr update_effects
   jsr update_game_state
   jsr update_player
@@ -318,8 +310,20 @@ main_loop_render_done:
   jsr update_dive_attack
   jsr update_enemy_hit_animations
   jsr update_enemy_fire
+  jsr render_formation_if_dirty
+  lda #$01
+  sta frame_capture_ready
   inc frame_capture_counter
   jmp main_loop
+
+render_formation_if_dirty:
+  lda formation_render_dirty
+  beq render_formation_if_dirty_done
+  jsr render_formation
+  lda #$00
+  sta formation_render_dirty
+render_formation_if_dirty_done:
+  rts
 
 init_vic:
   lda VIC_BANK_SELECT
