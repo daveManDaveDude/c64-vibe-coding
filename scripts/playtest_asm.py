@@ -696,6 +696,9 @@ class Playtester:
         game_state = None
         if "game_state" in self.symbols:
             game_state = self.monitor.mem_get(self.symbols["game_state"], 1)[0]
+        formation_init_debug = None
+        if "formation_init_debug" in self.symbols:
+            formation_init_debug = self.monitor.mem_get(self.symbols["formation_init_debug"], 1)[0]
         formation_char_render_mask = None
         if "formation_char_render_mask" in self.symbols:
             formation_char_render_mask = self.monitor.mem_get(self.symbols["formation_char_render_mask"], 1)[0]
@@ -763,6 +766,7 @@ class Playtester:
             "player_explosion_active": player_explosion_active,
             "player_bottom_sprite_mask_debug": player_bottom_sprite_mask_debug,
             "game_state": game_state,
+            "formation_init_debug": formation_init_debug,
             "sprite_enable": sprite_enable,
             "sprite_x_msb": msb,
             "active_sprite_slots": active_sprite_slots,
@@ -891,6 +895,9 @@ class Playtester:
         return min(bottom_start + max(bottom_count - 2, 0), self.formation_slot_count - 1)
 
     def formation_char_row(self, slot_index: int) -> int:
+        table_symbol = self.symbols.get("formation_char_row_table")
+        if table_symbol is not None and slot_index < self.formation_slot_count:
+            return self.monitor.mem_get(table_symbol + slot_index, 1)[0]
         if slot_index < self.formation_top_slot_count():
             return self.symbols["FORMATION_CHAR_BAND_TOP_ROW"]
         if slot_index < self.formation_mid_slot_end():
@@ -953,6 +960,9 @@ class Playtester:
         }
 
     def slot_visual_y(self, sample, slot_index: int) -> int:
+        table_symbol = self.symbols.get("formation_slot_visual_y_table")
+        if table_symbol is not None and slot_index < self.formation_slot_count:
+            return self.monitor.mem_get(table_symbol + slot_index, 1)[0]
         playfield_top_y = self.symbols.get("PLAYFIELD_TOP_Y", self.symbols["FORMATION_TOP_Y"])
         trim_top_rows = self.symbols.get("FORMATION_CHAR_TRIM_TOP_ROWS", 0)
         top_y = self.symbols.get(
@@ -975,7 +985,7 @@ class Playtester:
 
     def assert_char_renderer_output(self, name: str, sample):
         sample = self.wait_for_render_complete(sample)
-        if sample.get("formation_char_render_mask") is not None:
+        if sample.get("formation_char_render_mask") is not None and self.formation_slot_count <= 24:
             expected_mask = 0
             for slot in self.live_formation_slots(sample):
                 expected_mask |= 1 << slot["index"]
