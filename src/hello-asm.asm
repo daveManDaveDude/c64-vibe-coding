@@ -90,7 +90,7 @@ BasicUpstart2(start)
 .label FORMATION_CHAR_MID_Y = FORMATION_CHAR_BAND_MID_Y - FORMATION_CHAR_TRIM_TOP_ROWS
 .label FORMATION_CHAR_BOTTOM_Y = FORMATION_CHAR_BAND_BOTTOM_Y - FORMATION_CHAR_TRIM_TOP_ROWS
 .label FORMATION_SCROLL_START_RASTER = FORMATION_CHAR_BAND_TOP_Y - 1
-.label FORMATION_SCROLL_END_RASTER = FORMATION_CHAR_BAND_BOTTOM_Y + 8 - 1
+.label FORMATION_SCROLL_END_RASTER = FORMATION_CHAR_BAND_BOTTOM_Y + 8
 .label FORMATION_RENDER_START_RASTER = FORMATION_SCROLL_END_RASTER + 1
 .label FORMATION_CHAR_MIN_X_LO = $1a
 .label FORMATION_CHAR_MIN_X_HI = $00
@@ -134,6 +134,9 @@ BasicUpstart2(start)
 .label FORMATION_CHAR_DYNAMIC_MAX_X = ((FORMATION_CHAR_MAX_X_HI << 8) | FORMATION_CHAR_MAX_X_LO) + FORMATION_RIGHT_BOUNCE_ALLOWANCE
 .label FORMATION_CHAR_DYNAMIC_MAX_X_LO = <FORMATION_CHAR_DYNAMIC_MAX_X
 .label FORMATION_CHAR_DYNAMIC_MAX_X_HI = >FORMATION_CHAR_DYNAMIC_MAX_X
+.label FORMATION_MOVE_PERIOD = 2
+.label FORMATION_CLEAR_STRATEGY_EDGE_GLOBAL = $00
+.label FORMATION_CLEAR_STRATEGY_ROWWISE = $01
 .label ARCADE_SPRITE_PTR_BASE = $92
 .label FLAGSHIP_SPRITE0_PTR = ARCADE_SPRITE_PTR_BASE + 0
 .label FLAGSHIP_SPRITE1_PTR = ARCADE_SPRITE_PTR_BASE + 1
@@ -299,7 +302,12 @@ main_loop:
   jsr wait_frame
   lda #$00
   sta frame_capture_ready
+  lda formation_render_dirty
+  beq main_loop_render_done
   jsr render_formation
+  lda #$00
+  sta formation_render_dirty
+main_loop_render_done:
   lda #$01
   sta frame_capture_ready
   jsr update_effects
@@ -565,6 +573,12 @@ init_formation_alive_loop:
   lda #$00
   sta formation_frame
   sta formation_anim_index
+  lda #FORMATION_MOVE_PERIOD
+  sta formation_move_timer
+  lda #$01
+  sta formation_render_dirty
+  lda #$00
+  sta formation_full_redraw_pending
   jsr init_formation_renderer
   jsr update_formation_bounds
   jsr update_formation_animation_state
@@ -595,6 +609,7 @@ init_formation_renderer:
   sta formation_char_render_mask
   sta formation_char_render_mask_hi
   sta formation_char_render_mask_hi2
+  sta formation_full_redraw_pending
   ldx #$00
 init_formation_renderer_slot_loop:
   sta formation_char_last_col, x
@@ -845,13 +860,18 @@ raster_irq_done:
   jmp $ea81
 
 wait_frame:
-  lda #FORMATION_RENDER_START_RASTER
-wait_for_render_start_raster:
-  cmp RASTER
-  bne wait_for_render_start_raster
-wait_for_render_window:
-  cmp RASTER
-  beq wait_for_render_window
+wait_for_bottom_phase_clear:
+  lda raster_phase
+  cmp #RASTER_PHASE_BOTTOM
+  beq wait_for_bottom_phase_clear
+wait_for_bottom_phase:
+  lda raster_phase
+  cmp #RASTER_PHASE_BOTTOM
+  bne wait_for_bottom_phase
+wait_for_bottom_split_line:
+  lda RASTER
+  cmp #PLAYER_BOTTOM_SPLIT_RASTER
+  beq wait_for_bottom_split_line
   rts
 
 clear_active_dive_state:
@@ -877,7 +897,14 @@ cancel_active_dive:
   beq cancel_active_dive_done
   jsr update_formation_slot_positions
   jsr clear_active_dive_state
+  jsr mark_formation_full_redraw
 cancel_active_dive_done:
+  rts
+
+mark_formation_full_redraw:
+  lda #$01
+  sta formation_full_redraw_pending
+  sta formation_render_dirty
   rts
 
 clear_enemy_hit_animations:
@@ -1124,13 +1151,14 @@ update_formation:
   jmp formation_done
 
 update_formation_active:
-
   inc formation_frame
   jsr update_formation_animation_state
-  lda formation_frame
-  and #$01
-  beq formation_move_tick
+  dec formation_move_timer
+  beq formation_move_timer_elapsed
   jmp formation_done
+formation_move_timer_elapsed:
+  lda #FORMATION_MOVE_PERIOD
+  sta formation_move_timer
 
 formation_move_tick:
   jsr update_formation_bounds
@@ -1192,6 +1220,13 @@ formation_clamp_char_max:
 
 formation_store_x:
   jsr update_formation_slot_positions
+  lda formation_anchor_col
+  cmp formation_render_anchor_col
+  bne formation_store_x_mark_dirty
+  jmp formation_done
+formation_store_x_mark_dirty:
+  lda #$01
+  sta formation_render_dirty
 
 formation_done:
   rts
@@ -1202,7 +1237,12 @@ update_formation_animation_state:
     lsr
   }
   and #%00000011
+  cmp formation_anim_index
+  beq update_formation_animation_state_done
   sta formation_anim_index
+  lda #$01
+  sta formation_render_dirty
+update_formation_animation_state_done:
   rts
 
 update_formation_bounds:
@@ -1361,6 +1401,7 @@ dive_store_position_done:
 finish_dive_return:
   jsr update_formation_slot_positions
   jsr clear_active_dive_state
+  jsr mark_formation_full_redraw
   rts
 
 launch_dive_if_possible:
@@ -1425,6 +1466,7 @@ begin_dive:
   lda #$01
   sta dive_launch_hold
   jsr clear_dive_slot_char_handoff
+  jsr mark_formation_full_redraw
   lda #$01
   sta dive_active
   lda #$00
@@ -2359,11 +2401,16 @@ finish_slot_explosion:
 
 destroy_slot:
   tax
+  lda formation_slot0_alive, x
+  bne destroy_slot_live
+  rts
+destroy_slot_live:
   lda #$00
   sta formation_slot0_alive, x
+  jsr mark_formation_full_redraw
   txa
   pha
-  jsr clear_dive_slot_char_handoff
+  jsr clear_dive_slot_char_handoff_if_active
   jsr update_formation_bounds
   jsr update_formation_slot_positions
   pla
@@ -2385,6 +2432,16 @@ clear_dive_if_slot:
 
   jsr clear_active_dive_state
 clear_dive_done:
+  rts
+
+clear_dive_slot_char_handoff_if_active:
+  lda dive_active
+  beq clear_dive_slot_char_handoff_if_active_done
+  txa
+  cmp dive_slot
+  bne clear_dive_slot_char_handoff_if_active_done
+  jmp clear_dive_slot_char_handoff
+clear_dive_slot_char_handoff_if_active_done:
   rts
 
 award_score_for_slot:
@@ -2488,12 +2545,38 @@ update_formation_slot_positions_loop:
   lda formation_x_lo
   clc
   adc formation_live_min_offset
+  sta formation_char_relative_lo
+  lda formation_x_hi
+  adc #$00
+  sta formation_char_relative_hi
 
 update_formation_shift_phase_store:
+  lda formation_char_relative_lo
   sec
   sbc #PLAYFIELD_LEFT_X_LO
+  sta formation_char_relative_lo
+  lda formation_char_relative_hi
+  sbc #PLAYFIELD_LEFT_X_HI
+  sta formation_char_relative_hi
+
+  lda formation_char_relative_lo
   and #%00000111
   sta formation_shift_phase
+
+  lsr formation_char_relative_hi
+  ror formation_char_relative_lo
+  lsr formation_char_relative_hi
+  ror formation_char_relative_lo
+  lsr formation_char_relative_hi
+  ror formation_char_relative_lo
+
+  lda formation_char_relative_lo
+  sta formation_anchor_col
+  cmp formation_render_anchor_col
+  bne update_formation_shift_phase_store_done
+  lda formation_shift_phase
+  sta formation_render_scroll_phase
+update_formation_shift_phase_store_done:
   rts
 
 load_formation_slot_position:
@@ -2609,23 +2692,24 @@ render_formation:
   sta formation_char_render_mask_pending
   sta formation_char_render_mask_pending_hi
   sta formation_char_render_mask_pending_hi2
-  ldx #$00
-render_formation_clear_previous_loop:
-  lda formation_char_render_mask
-  and formation_char_render_bit_table, x
-  bne render_formation_clear_previous
-  lda formation_char_render_mask_hi
-  and formation_char_render_bit_hi_table, x
-  bne render_formation_clear_previous
-  lda formation_char_render_mask_hi2
-  and formation_char_render_bit_hi2_table, x
-  beq render_formation_clear_previous_next
-render_formation_clear_previous:
-  jsr clear_formation_char_slot_saved
-render_formation_clear_previous_next:
-  inx
-  cpx #FORMATION_SLOT_COUNT
-  bcc render_formation_clear_previous_loop
+  lda formation_full_redraw_pending
+  beq render_formation_check_edge_clear
+  jsr clear_formation_char_band
+  lda #$00
+  sta formation_full_redraw_pending
+  jmp render_formation_slots
+render_formation_check_edge_clear:
+  lda formation_anchor_col
+  cmp formation_render_anchor_col
+  beq render_formation_slots
+  lda formation_clear_strategy
+  cmp #FORMATION_CLEAR_STRATEGY_ROWWISE
+  beq render_formation_edge_clear_rowwise
+  jsr clear_formation_char_exposed_columns_global
+  jmp render_formation_slots
+render_formation_edge_clear_rowwise:
+  jsr clear_formation_char_exposed_columns_rowwise
+render_formation_slots:
   ldx #$00
 render_formation_slot_state_loop:
   jsr render_formation_char_slot_state
@@ -2638,6 +2722,8 @@ render_formation_slot_state_loop:
   sta formation_char_render_mask_hi
   lda formation_char_render_mask_pending_hi2
   sta formation_char_render_mask_hi2
+  lda formation_anchor_col
+  sta formation_render_anchor_col
   rts
 
 render_formation_char_slot_state:
@@ -2943,6 +3029,157 @@ clear_formation_char_band_row_loop:
   bcc clear_formation_char_band_loop
   rts
 
+clear_formation_char_exposed_columns_global:
+  lda formation_live_max_offset
+  sec
+  sbc formation_live_min_offset
+  lsr
+  lsr
+  lsr
+  clc
+  adc #$04
+  sta formation_clear_row_width_cols
+
+  lda #$00
+  sta formation_clear_row_offset_cols
+
+  ldx #$00
+clear_formation_char_exposed_columns_global_loop:
+  jsr clear_formation_char_exposed_columns_apply_row
+  inx
+  cpx #FORMATION_CHAR_BAND_HEIGHT
+  bcc clear_formation_char_exposed_columns_global_loop
+  rts
+
+clear_formation_char_exposed_columns_rowwise:
+  ldx #$00
+clear_formation_char_exposed_columns_rowwise_loop:
+  jsr clear_formation_char_exposed_columns_prepare_rowwise
+  inx
+  cpx #FORMATION_CHAR_BAND_HEIGHT
+  bcc clear_formation_char_exposed_columns_rowwise_loop
+  rts
+
+clear_formation_char_exposed_columns_prepare_rowwise:
+  lda #$ff
+  sta formation_clear_row_min_offset
+  lda #$00
+  sta formation_clear_row_max_offset
+
+  ldy formation_clear_slot_scan_start_table, x
+  lda formation_clear_slot_scan_end_table, x
+  sta formation_clear_scan_end
+clear_formation_char_exposed_columns_scan_loop:
+  cpy formation_clear_scan_end
+  bcs clear_formation_char_exposed_columns_scan_done
+  lda formation_slot0_alive, y
+  beq clear_formation_char_exposed_columns_scan_next
+
+  lda formation_slot_offset_table, y
+  cmp formation_clear_row_min_offset
+  bcs clear_formation_char_exposed_columns_check_max
+  sta formation_clear_row_min_offset
+clear_formation_char_exposed_columns_check_max:
+  lda formation_slot_offset_table, y
+  cmp formation_clear_row_max_offset
+  bcc clear_formation_char_exposed_columns_scan_next
+  sta formation_clear_row_max_offset
+clear_formation_char_exposed_columns_scan_next:
+  iny
+  jmp clear_formation_char_exposed_columns_scan_loop
+
+clear_formation_char_exposed_columns_scan_done:
+  lda formation_clear_row_min_offset
+  cmp #$ff
+  bne clear_formation_char_exposed_columns_prepare_rowwise_live
+  jmp clear_formation_char_exposed_columns_done
+clear_formation_char_exposed_columns_prepare_rowwise_live:
+  sec
+  sbc formation_live_min_offset
+  lsr
+  lsr
+  lsr
+  sta formation_clear_row_offset_cols
+
+  lda formation_clear_row_max_offset
+  sec
+  sbc formation_live_min_offset
+  lsr
+  lsr
+  lsr
+  clc
+  adc #$04
+  sec
+  sbc formation_clear_row_offset_cols
+  sta formation_clear_row_width_cols
+
+clear_formation_char_exposed_columns_apply_row:
+  lda formation_render_anchor_col
+  clc
+  adc formation_clear_row_offset_cols
+  sta formation_clear_old_start_col
+  lda formation_anchor_col
+  clc
+  adc formation_clear_row_offset_cols
+  sta formation_clear_new_start_col
+
+  lda formation_anchor_col
+  cmp formation_render_anchor_col
+  bcc clear_formation_char_exposed_columns_left
+  lda formation_clear_old_start_col
+  sta formation_clear_start_col
+  lda formation_clear_new_start_col
+  sta formation_clear_end_col
+  jmp clear_formation_char_exposed_columns_clamp
+
+clear_formation_char_exposed_columns_left:
+  lda formation_clear_new_start_col
+  clc
+  adc formation_clear_row_width_cols
+  sta formation_clear_start_col
+  lda formation_clear_old_start_col
+  clc
+  adc formation_clear_row_width_cols
+  sta formation_clear_end_col
+
+clear_formation_char_exposed_columns_clamp:
+  lda formation_clear_start_col
+  cmp formation_clear_end_col
+  bcs clear_formation_char_exposed_columns_done
+  cmp #(FORMATION_CHAR_BAND_ORIGIN_COL + FORMATION_CHAR_BAND_WIDTH)
+  bcs clear_formation_char_exposed_columns_done
+
+  lda formation_clear_end_col
+  cmp #(FORMATION_CHAR_BAND_ORIGIN_COL + FORMATION_CHAR_BAND_WIDTH)
+  bcc clear_formation_char_exposed_columns_row
+  lda #(FORMATION_CHAR_BAND_ORIGIN_COL + FORMATION_CHAR_BAND_WIDTH)
+  sta formation_clear_end_col
+
+clear_formation_char_exposed_columns_row:
+  lda formation_char_band_rows, x
+  tay
+  lda screen_row_lo, y
+  sta SCREEN_PTR
+  lda screen_row_hi, y
+  sta SCREEN_PTR + 1
+  lda color_row_lo, y
+  sta COLOR_PTR
+  lda color_row_hi, y
+  sta COLOR_PTR + 1
+
+  ldy formation_clear_start_col
+clear_formation_char_exposed_columns_row_loop:
+  lda #$20
+  sta (SCREEN_PTR), y
+  lda #PLAYFIELD_TEXT_COLOR
+  sta (COLOR_PTR), y
+  iny
+  cpy formation_clear_end_col
+  bcc clear_formation_char_exposed_columns_row_loop
+
+clear_formation_char_exposed_columns_done:
+  rts
+
 * = $4d40 "Main Data"
 
 formation_x_lo:
@@ -2953,6 +3190,8 @@ formation_dir:
   .byte $01
 formation_frame:
   .byte $00
+formation_move_timer:
+  .byte FORMATION_MOVE_PERIOD
 formation_bound_min_lo:
   .byte FORMATION_CHAR_MIN_X_LO
 formation_bound_min_hi:
@@ -3153,7 +3392,35 @@ formation_anim_index:
   .byte $00
 formation_shift_phase:
   .byte $00
+formation_anchor_col:
+  .byte $00
 formation_render_scroll_phase:
+  .byte $00
+formation_render_anchor_col:
+  .byte $00
+formation_render_dirty:
+  .byte $01
+formation_clear_strategy:
+  .byte FORMATION_CLEAR_STRATEGY_ROWWISE
+formation_full_redraw_pending:
+  .byte $00
+formation_clear_row_min_offset:
+  .byte $00
+formation_clear_row_max_offset:
+  .byte $00
+formation_clear_row_offset_cols:
+  .byte $00
+formation_clear_row_width_cols:
+  .byte $00
+formation_clear_scan_end:
+  .byte $00
+formation_clear_old_start_col:
+  .byte $00
+formation_clear_new_start_col:
+  .byte $00
+formation_clear_start_col:
+  .byte $00
+formation_clear_end_col:
   .byte $00
 frame_capture_counter:
   .byte $00
@@ -3335,6 +3602,10 @@ enemy_explosion_sequence:
   .byte ENEMY_EXPLOSION_SPRITE3_PTR,ENEMY_EXPLOSION_SPRITE0_PTR,ENEMY_EXPLOSION_SPRITE1_PTR,ENEMY_EXPLOSION_SPRITE2_PTR
 formation_char_band_rows:
   .byte FORMATION_CHAR_BAND_TOP_ROW,FORMATION_CHAR_BAND_TOP_ROW + 1,FORMATION_CHAR_BAND_MID_ROW,FORMATION_CHAR_BAND_MID_ROW + 1,FORMATION_CHAR_BAND_BOTTOM_ROW
+formation_clear_slot_scan_start_table:
+  .byte $00,$00,FORMATION_TOP_SLOT_END,FORMATION_TOP_SLOT_END,FORMATION_MID_SLOT_END
+formation_clear_slot_scan_end_table:
+  .byte FORMATION_TOP_SLOT_END,FORMATION_TOP_SLOT_END,FORMATION_MID_SLOT_END,FORMATION_MID_SLOT_END,FORMATION_SLOT_COUNT
 formation_char_row_table:
   .byte FORMATION_CHAR_BAND_TOP_ROW,FORMATION_CHAR_BAND_TOP_ROW,FORMATION_CHAR_BAND_TOP_ROW,FORMATION_CHAR_BAND_TOP_ROW,FORMATION_CHAR_BAND_MID_ROW,FORMATION_CHAR_BAND_MID_ROW,FORMATION_CHAR_BAND_MID_ROW,FORMATION_CHAR_BAND_MID_ROW,FORMATION_CHAR_BAND_MID_ROW,FORMATION_CHAR_BAND_MID_ROW,FORMATION_CHAR_BAND_BOTTOM_ROW,FORMATION_CHAR_BAND_BOTTOM_ROW,FORMATION_CHAR_BAND_BOTTOM_ROW,FORMATION_CHAR_BAND_BOTTOM_ROW,FORMATION_CHAR_BAND_BOTTOM_ROW,FORMATION_CHAR_BAND_BOTTOM_ROW,FORMATION_CHAR_BAND_BOTTOM_ROW,FORMATION_CHAR_BAND_BOTTOM_ROW
 formation_slot_visual_y_table:
@@ -3420,6 +3691,8 @@ load_slot_visual_y:
 
 clear_dive_slot_char_handoff:
   ldx dive_slot
+  cpx #FORMATION_SLOT_COUNT
+  bcs clear_dive_slot_char_handoff_done
   jsr clear_formation_char_slot_saved
   lda formation_char_render_mask
   and formation_char_clear_bit_table, x
@@ -3439,6 +3712,7 @@ clear_dive_slot_char_handoff:
   lda formation_char_render_mask_pending_hi2
   and formation_char_clear_bit_hi2_table, x
   sta formation_char_render_mask_pending_hi2
+clear_dive_slot_char_handoff_done:
   rts
 
 draw_player_extra_layers_char:
@@ -3646,6 +3920,8 @@ disable_char_mode_dynamic_sprites:
   lda SPRITE_MULTICOLOR
   and #CHAR_MODE_STATIC_SPRITE_MASK
   sta SPRITE_MULTICOLOR
+  lda #$00
+  sta player_bottom_sprite_mask_debug
   rts
 
 render_char_mode_top_sprites:
@@ -3682,6 +3958,8 @@ render_char_mode_enemy_effects_done:
   rts
 
 render_char_mode_enemy_effects_bottom:
+  lda #$00
+  sta player_bottom_sprite_mask_debug
   ldx #$00
   ldy #$00
 render_char_mode_enemy_effects_bottom_loop:

@@ -16,6 +16,11 @@ script -q "$LOGFILE" \
   +confirmonexit +saveres \
   +sound \
   -pal -power50 \
+  -VICIIfilter 0 \
+  -VICIIglfilter 0 \
+  -VICIIaspectmode 0 \
+  -VICIIdscan \
+  -VICIIvsync \
   -autostart-warp \
   -limitcycles "$CYCLES" \
   -autostart "$D64:$CBMNAME"

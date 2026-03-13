@@ -214,6 +214,8 @@ class MacOSGui:
         self.logger = logger
         self.capture_region = capture_region
         self.pid = None
+        self.window_id = None
+        self.window_capture_disabled = False
         self.app_services = None
         self.core_foundation = None
         self.keyboard_backend = "osascript"
@@ -315,6 +317,48 @@ class MacOSGui:
             ]
         self._run_osascript(lines)
 
+    def _window_id_script(self):
+        if self.pid is None:
+            return [
+                'tell application "System Events"',
+                f'  tell application process "{self.process_name}"',
+                '    if (count of windows) is 0 then error "VICE window not found"',
+                '    return value of attribute "AXWindowNumber" of window 1',
+                "  end tell",
+                "end tell",
+            ]
+        return [
+            'tell application "System Events"',
+            f'  set matchingProcesses to every application process whose unix id is {self.pid}',
+            '  if (count of matchingProcesses) is 0 then error "VICE process not found"',
+            "  tell item 1 of matchingProcesses",
+            '    if (count of windows) is 0 then error "VICE window not found"',
+            '    return value of attribute "AXWindowNumber" of window 1',
+            "  end tell",
+            "end tell",
+        ]
+
+    def get_window_id(self) -> Optional[int]:
+        if self.window_capture_disabled:
+            return None
+        if self.window_id is not None:
+            return self.window_id
+        try:
+            raw_value = self._run_osascript(self._window_id_script())
+        except PlaytestFailure as exc:
+            self.logger.log(f"Window-id capture unavailable, falling back to region capture: {exc}")
+            self.window_capture_disabled = True
+            return None
+        try:
+            self.window_id = int(raw_value.strip())
+        except ValueError:
+            self.logger.log(
+                f"Window-id capture unavailable, falling back to region capture: invalid window id {raw_value!r}"
+            )
+            self.window_capture_disabled = True
+            return None
+        return self.window_id
+
     def key_down(self, key_code: int) -> None:
         self._send_key_event(key_code, True)
 
@@ -346,8 +390,27 @@ class MacOSGui:
             ]
         )
 
-    def capture_window(self, destination: Path) -> str:
+    def capture_window(self, destination: Path) -> tuple[str, str]:
         destination.parent.mkdir(parents=True, exist_ok=True)
+        window_id = self.get_window_id()
+        if window_id is not None:
+            try:
+                subprocess.run(
+                    ["screencapture", "-x", "-o", "-l", str(window_id), str(destination)],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+            except subprocess.CalledProcessError as exc:
+                self.logger.log(
+                    "Window-id capture failed, falling back to region capture: "
+                    f"{exc.stderr.strip() or exc.stdout.strip() or exc}"
+                )
+                self.window_id = None
+                self.window_capture_disabled = True
+            else:
+                digest = hashlib.sha256(destination.read_bytes()).hexdigest()
+                return digest, "window"
         try:
             subprocess.run(
                 ["screencapture", "-x", "-R", self.capture_region, str(destination)],
@@ -363,7 +426,7 @@ class MacOSGui:
                 else "screencapture failed."
             ) from exc
         digest = hashlib.sha256(destination.read_bytes()).hexdigest()
-        return digest
+        return digest, "region"
 
 
 class Playtester:
@@ -379,6 +442,7 @@ class Playtester:
         self.vice_process = None
         self.sample_counter = 0
         self.samples = []
+        self.capture_modes_seen = set()
         self.host_capture_enabled = args.capture_host_screenshots
         self.host_capture_failure = None
         self.suppress_host_capture = False
@@ -395,6 +459,8 @@ class Playtester:
                 "exit_screenshot": str(args.exit_screenshot),
                 "keyboard_backend": self.gui.keyboard_backend,
                 "capture_host_screenshots": args.capture_host_screenshots,
+                "capture_mode": None,
+                "capture_modes_seen": [],
             },
             "steps": [],
             "samples": self.samples,
@@ -469,6 +535,14 @@ class Playtester:
             "+saveres",
             "-pal",
             "-power50",
+            "-VICIIfilter",
+            "0",
+            "-VICIIglfilter",
+            "0",
+            "-VICIIaspectmode",
+            "0",
+            "-VICIIdscan",
+            "-VICIIvsync",
             "-autostart-warp",
             "-binarymonitor",
             "-binarymonitoraddress",
@@ -746,6 +820,7 @@ class Playtester:
             **state,
             "screenshot": None,
             "screenshot_sha256": None,
+            "capture_mode": None,
         }
         if self.host_capture_enabled and not self.suppress_host_capture:
             screenshot_path = self.args.frames_dir / f"{self.sample_counter:03d}-{stage}.png"
@@ -753,7 +828,7 @@ class Playtester:
                 screenshot_settle_seconds = getattr(self.args, "screenshot_settle_seconds", 0.0)
                 if screenshot_settle_seconds > 0:
                     time.sleep(screenshot_settle_seconds)
-                screenshot_hash = self.gui.capture_window(screenshot_path)
+                screenshot_hash, capture_mode = self.gui.capture_window(screenshot_path)
             except PlaytestFailure as exc:
                 self.host_capture_enabled = False
                 self.host_capture_failure = str(exc)
@@ -763,6 +838,12 @@ class Playtester:
             else:
                 sample["screenshot"] = str(screenshot_path)
                 sample["screenshot_sha256"] = screenshot_hash
+                sample["capture_mode"] = capture_mode
+                self.capture_modes_seen.add(capture_mode)
+                self.results["artifacts"]["capture_modes_seen"] = sorted(self.capture_modes_seen)
+                self.results["artifacts"]["capture_mode"] = (
+                    capture_mode if len(self.capture_modes_seen) == 1 else "mixed"
+                )
         self.sample_counter += 1
         self.samples.append(sample)
         return sample

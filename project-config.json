@@ -1,10 +1,10 @@
 {
-  "name": "hello",
-  "description": "c64-vibe-coding BASIC example",
-  "toolkit": "basic",
+  "name": "hello-asm",
+  "description": "c64-vibe-coding assembly game",
+  "toolkit": "kick",
   "build": "debug",
   "sources": [
-    "src/hello.bas"
+    "src/hello-asm.asm"
   ],
   "args": []
 }

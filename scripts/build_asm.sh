@@ -17,6 +17,20 @@ if [ "$#" -gt 0 ]; then
   EXTRA_ARGS+=("$@")
 fi
 
+has_arg() {
+  local needle="$1"
+  local arg
+  if [ "${#EXTRA_ARGS[@]}" -eq 0 ]; then
+    return 1
+  fi
+  for arg in "${EXTRA_ARGS[@]}"; do
+    if [ "$arg" = "$needle" ]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
 SPRITE_PNG="ArcadeGalaxianSprites.png"
 PLAYER_EXPLOSION_PNG="ArcadeGalaxianSprites explosions.png"
 SPRITE_ASM="src/generated_enemy_sprites.asm"
@@ -57,6 +71,23 @@ JAVA_BIN="$(scripts/find_java.sh)"
 
 mkdir -p "$OUTDIR"
 ABS_OUTDIR="$(cd "$OUTDIR" && pwd)"
+OUTBASE="$(basename "${SRC%.asm}")"
+ASMINFO_FILE="$ABS_OUTDIR/${OUTBASE}.info"
+
+# VS64 expects KickAssembler projects to emit build/<name>.dbg for source-level debugging.
+# Mirror the extension's default debug build flags so F5 can load debug info.
+if ! has_arg "-debugdump"; then
+  EXTRA_ARGS+=("-debugdump")
+fi
+if ! has_arg "-debug"; then
+  EXTRA_ARGS+=("-debug")
+fi
+if ! has_arg "-asminfo"; then
+  EXTRA_ARGS+=("-asminfo" "files|errors")
+fi
+if ! has_arg "-asminfofile"; then
+  EXTRA_ARGS+=("-asminfofile" "$ASMINFO_FILE")
+fi
 
 if [ "${#EXTRA_ARGS[@]}" -gt 0 ]; then
   "$JAVA_BIN" -jar tools/KickAssembler/KickAss.jar -odir "$ABS_OUTDIR" "${EXTRA_ARGS[@]}" "$SRC"
@@ -64,5 +95,5 @@ else
   "$JAVA_BIN" -jar tools/KickAssembler/KickAss.jar -odir "$ABS_OUTDIR" "$SRC"
 fi
 
-OUTPRG="$OUTDIR/$(basename "${SRC%.asm}").prg"
+OUTPRG="$OUTDIR/${OUTBASE}.prg"
 echo "Built: $OUTPRG"

@@ -13,6 +13,11 @@ exec x64sc \
   -default \
   +confirmonexit +saveres \
   -pal -power50 \
+  -VICIIfilter 0 \
+  -VICIIglfilter 0 \
+  -VICIIaspectmode 0 \
+  -VICIIdscan \
+  -VICIIvsync \
   -autostart-warp \
   -binarymonitor \
   -binarymonitoraddress "$ADDRESS" \

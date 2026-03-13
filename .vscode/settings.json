@@ -3,6 +3,6 @@
   "vs64.viceExecutable": "/opt/homebrew/bin/x64sc",
   "vs64.vicePort": "6502",
   "vs64.viceTimeout": "10",
-  "vs64.viceArgs": "-autostartprgmode 1",
+  "vs64.viceArgs": "-autostartprgmode 1 -VICIIfilter 0 -VICIIglfilter 0 -VICIIaspectmode 0 -VICIIdscan -VICIIvsync",
   "vs64.autoBuild": false
 }
