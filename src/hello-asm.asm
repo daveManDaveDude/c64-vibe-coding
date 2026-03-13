@@ -587,8 +587,6 @@ init_formation_alive_loop:
   cpx #FORMATION_SLOT_COUNT
   bcc init_formation_alive_loop
 
-  lda #$01
-  sta formation_init_debug
   lda #$00
   sta formation_frame
   sta formation_anim_index
@@ -599,25 +597,13 @@ init_formation_alive_loop:
   lda #$00
   sta formation_full_redraw_pending
   jsr init_formation_renderer
-  lda #$02
-  sta formation_init_debug
   jsr update_formation_bounds
-  lda #$03
-  sta formation_init_debug
   jsr update_formation_animation_state
-  lda #$04
-  sta formation_init_debug
   jsr update_formation_slot_positions
-  lda #$05
-  sta formation_init_debug
   jsr mark_formation_full_redraw
-  lda #$06
-  sta formation_init_debug
   rts
 
 init_formation_renderer:
-  lda #$10
-  sta formation_init_debug
   lda #$00
   sta SPRITE_X_MSB
   sta SPRITE_PRIORITY
@@ -632,11 +618,7 @@ init_formation_renderer:
   sta SPRITE_MULTICOLOR_1
   sta BACKGROUND_MULTICOLOR_2
   jsr clear_formation_char_band
-  lda #$11
-  sta formation_init_debug
   jsr clear_formation_char_glyphs
-  lda #$12
-  sta formation_init_debug
   lda #$00
   sta formation_char_render_mask_pending
   sta formation_char_render_mask_pending_hi
@@ -652,8 +634,6 @@ init_formation_renderer_slot_loop:
   inx
   cpx #FORMATION_SLOT_COUNT
   bcc init_formation_renderer_slot_loop
-  lda #$13
-  sta formation_init_debug
   rts
 
 init_player:
@@ -3264,7 +3244,6 @@ formation_live_min_offset:
 formation_live_max_offset:
   .byte 252
 formation_slot0_x_lo:
-formation_slot0_x_hi:
   .byte <(FORMATION_START_X_LO + 98),>(FORMATION_START_X_LO + 98)
   .byte <(FORMATION_START_X_LO + 154),>(FORMATION_START_X_LO + 154)
   .byte <(FORMATION_START_X_LO + 56),>(FORMATION_START_X_LO + 56)
@@ -3311,6 +3290,7 @@ formation_slot0_x_hi:
   .byte <(FORMATION_START_X_LO + 196),>(FORMATION_START_X_LO + 196)
   .byte <(FORMATION_START_X_LO + 224),>(FORMATION_START_X_LO + 224)
   .byte <(FORMATION_START_X_LO + 252),>(FORMATION_START_X_LO + 252)
+.label formation_slot0_x_hi = formation_slot0_x_lo + 1
 formation_slot0_alive:
   .fill FORMATION_SLOT_COUNT, $01
 slot_explosion_timer:
@@ -3553,8 +3533,6 @@ formation_shared_cache_anim_index:
   .byte $ff
 formation_shared_type_frame_value_table:
   .fill FORMATION_SHARED_TYPE_COUNT, $00
-formation_init_debug:
-  .byte $00
 enemy_explosion_pointer:
   .byte $00
 char_mode_effect_source_slot:

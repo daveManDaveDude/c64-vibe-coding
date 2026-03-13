@@ -696,9 +696,6 @@ class Playtester:
         game_state = None
         if "game_state" in self.symbols:
             game_state = self.monitor.mem_get(self.symbols["game_state"], 1)[0]
-        formation_init_debug = None
-        if "formation_init_debug" in self.symbols:
-            formation_init_debug = self.monitor.mem_get(self.symbols["formation_init_debug"], 1)[0]
         formation_char_render_mask = None
         if "formation_char_render_mask" in self.symbols:
             formation_char_render_mask = self.monitor.mem_get(self.symbols["formation_char_render_mask"], 1)[0]
@@ -766,7 +763,6 @@ class Playtester:
             "player_explosion_active": player_explosion_active,
             "player_bottom_sprite_mask_debug": player_bottom_sprite_mask_debug,
             "game_state": game_state,
-            "formation_init_debug": formation_init_debug,
             "sprite_enable": sprite_enable,
             "sprite_x_msb": msb,
             "active_sprite_slots": active_sprite_slots,
