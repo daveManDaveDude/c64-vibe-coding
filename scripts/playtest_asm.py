@@ -714,6 +714,61 @@ class Playtester:
         raster_phase = None
         if "raster_phase" in self.symbols:
             raster_phase = self.monitor.mem_get(self.symbols["raster_phase"], 1)[0]
+        formation_render_start_phase = None
+        if "formation_render_start_phase" in self.symbols:
+            formation_render_start_phase = self.monitor.mem_get(
+                self.symbols["formation_render_start_phase"], 1
+            )[0]
+        formation_render_start_raster = None
+        if "formation_render_start_raster" in self.symbols:
+            formation_render_start_raster = self.monitor.mem_get(
+                self.symbols["formation_render_start_raster"], 1
+            )[0]
+        formation_render_top_row_end_phase = None
+        if "formation_render_top_row_end_phase" in self.symbols:
+            formation_render_top_row_end_phase = self.monitor.mem_get(
+                self.symbols["formation_render_top_row_end_phase"], 1
+            )[0]
+        formation_render_top_row_end_raster = None
+        if "formation_render_top_row_end_raster" in self.symbols:
+            formation_render_top_row_end_raster = self.monitor.mem_get(
+                self.symbols["formation_render_top_row_end_raster"], 1
+            )[0]
+        formation_render_end_phase = None
+        if "formation_render_end_phase" in self.symbols:
+            formation_render_end_phase = self.monitor.mem_get(
+                self.symbols["formation_render_end_phase"], 1
+            )[0]
+        formation_render_end_raster = None
+        if "formation_render_end_raster" in self.symbols:
+            formation_render_end_raster = self.monitor.mem_get(
+                self.symbols["formation_render_end_raster"], 1
+            )[0]
+        formation_shared_cache_update_counter = None
+        if "formation_shared_cache_update_counter" in self.symbols:
+            formation_shared_cache_update_counter = self.monitor.mem_get(
+                self.symbols["formation_shared_cache_update_counter"], 1
+            )[0]
+        formation_shared_cache_update_start_phase = None
+        if "formation_shared_cache_update_start_phase" in self.symbols:
+            formation_shared_cache_update_start_phase = self.monitor.mem_get(
+                self.symbols["formation_shared_cache_update_start_phase"], 1
+            )[0]
+        formation_shared_cache_update_start_raster = None
+        if "formation_shared_cache_update_start_raster" in self.symbols:
+            formation_shared_cache_update_start_raster = self.monitor.mem_get(
+                self.symbols["formation_shared_cache_update_start_raster"], 1
+            )[0]
+        formation_shared_cache_update_end_phase = None
+        if "formation_shared_cache_update_end_phase" in self.symbols:
+            formation_shared_cache_update_end_phase = self.monitor.mem_get(
+                self.symbols["formation_shared_cache_update_end_phase"], 1
+            )[0]
+        formation_shared_cache_update_end_raster = None
+        if "formation_shared_cache_update_end_raster" in self.symbols:
+            formation_shared_cache_update_end_raster = self.monitor.mem_get(
+                self.symbols["formation_shared_cache_update_end_raster"], 1
+            )[0]
         frame_capture_counter = None
         if "frame_capture_counter" in self.symbols:
             frame_capture_counter = self.monitor.mem_get(self.symbols["frame_capture_counter"], 1)[0]
@@ -783,6 +838,17 @@ class Playtester:
             "formation_shift_phase": formation_shift_phase,
             "raster_phase": raster_phase,
             "raster_line": vic(RASTER),
+            "formation_render_start_phase": formation_render_start_phase,
+            "formation_render_start_raster": formation_render_start_raster,
+            "formation_render_top_row_end_phase": formation_render_top_row_end_phase,
+            "formation_render_top_row_end_raster": formation_render_top_row_end_raster,
+            "formation_render_end_phase": formation_render_end_phase,
+            "formation_render_end_raster": formation_render_end_raster,
+            "formation_shared_cache_update_counter": formation_shared_cache_update_counter,
+            "formation_shared_cache_update_start_phase": formation_shared_cache_update_start_phase,
+            "formation_shared_cache_update_start_raster": formation_shared_cache_update_start_raster,
+            "formation_shared_cache_update_end_phase": formation_shared_cache_update_end_phase,
+            "formation_shared_cache_update_end_raster": formation_shared_cache_update_end_raster,
             "frame_capture_counter": frame_capture_counter,
             "enemy_attack_active": enemy_attack_active,
             "frame_capture_ready": frame_capture_ready,

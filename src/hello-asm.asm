@@ -89,13 +89,17 @@ BasicUpstart2(start)
 .label FORMATION_CHAR_TOP_Y = PLAYFIELD_TOP_Y + (FORMATION_ROW1_CHAR_ROW * 8) - FORMATION_CHAR_TRIM_TOP_ROWS
 .label FORMATION_CHAR_MID_Y = PLAYFIELD_TOP_Y + (FORMATION_ROW2_CHAR_ROW * 8) - FORMATION_CHAR_TRIM_TOP_ROWS
 .label FORMATION_CHAR_BOTTOM_Y = PLAYFIELD_TOP_Y + (FORMATION_ROW5_CHAR_ROW * 8) - FORMATION_CHAR_TRIM_TOP_ROWS
-.label FORMATION_SCROLL_START_RASTER = (PLAYFIELD_TOP_Y + (FORMATION_ROW0_CHAR_ROW * 8)) - 1
+.label FORMATION_SCROLL_PRELOAD_RASTERS = 8
+.label FORMATION_SCROLL_START_RASTER = (PLAYFIELD_TOP_Y + (FORMATION_ROW0_CHAR_ROW * 8) - FORMATION_CHAR_TRIM_TOP_ROWS) - 1 - FORMATION_SCROLL_PRELOAD_RASTERS
 .label FORMATION_SCROLL_END_RASTER = (PLAYFIELD_TOP_Y + (FORMATION_ROW5_CHAR_ROW * 8)) + 8
 .label FORMATION_RENDER_START_RASTER = FORMATION_SCROLL_END_RASTER + 1
-.label FORMATION_CHAR_MIN_X_LO = $1a
-.label FORMATION_CHAR_MIN_X_HI = $00
-.label FORMATION_CHAR_MAX_X_LO = $24
-.label FORMATION_CHAR_MAX_X_HI = $01
+.label FORMATION_EDGE_DEBUG_INSET = 0
+.label FORMATION_CHAR_MIN_X = $001a + FORMATION_EDGE_DEBUG_INSET
+.label FORMATION_CHAR_MIN_X_LO = <FORMATION_CHAR_MIN_X
+.label FORMATION_CHAR_MIN_X_HI = >FORMATION_CHAR_MIN_X
+.label FORMATION_CHAR_MAX_X = $0124 - FORMATION_EDGE_DEBUG_INSET
+.label FORMATION_CHAR_MAX_X_LO = <FORMATION_CHAR_MAX_X
+.label FORMATION_CHAR_MAX_X_HI = >FORMATION_CHAR_MAX_X
 .label FORMATION_RIGHT_BOUNCE_ALLOWANCE = 18
 .label FORMATION_TOP_SLOT_COUNT = 7
 .label FORMATION_MID_SLOT_COUNT = 7
@@ -316,15 +320,18 @@ main_loop:
   jsr wait_frame
   lda #$00
   sta frame_capture_ready
+  // Advance formation first so anchor-wrap frames redraw for the same visible
+  // frame, then keep the rest of gameplay work after the char-band render.
+  jsr update_formation
+  jsr update_formation_shared_glyph_cache_if_needed
+  jsr render_formation_if_dirty
   jsr update_effects
   jsr update_game_state
   jsr update_player
   jsr update_shot
-  jsr update_formation
   jsr update_dive_attack
   jsr update_enemy_hit_animations
   jsr update_enemy_fire
-  jsr render_formation_if_dirty
   lda #$01
   sta frame_capture_ready
   inc frame_capture_counter
@@ -336,7 +343,16 @@ main_loop:
   sta frame_capture_latch_ready
 frame_capture_latch_wait:
   lda frame_capture_latch_arm
-  bne frame_capture_latch_wait
+  beq frame_capture_latch_release
+  cmp #$02
+  beq frame_capture_latch_step
+  jmp frame_capture_latch_wait
+frame_capture_latch_step:
+  // Capture tooling writes $02 while latched to advance one frame and stop
+  // again immediately on the next post-render boundary.
+  lda #$01
+  sta frame_capture_latch_arm
+frame_capture_latch_release:
   lda #$00
   sta frame_capture_latch_ready
   cli
@@ -874,7 +890,13 @@ raster_irq_formation_scroll_on_phase:
   sta raster_phase
   lda #FORMATION_SCROLL_END_RASTER
   sta RASTER
+  lda formation_force_zero_scroll_debug
+  beq raster_irq_formation_scroll_on_phase_live
+  lda #$00
+  beq raster_irq_formation_scroll_on_phase_store
+raster_irq_formation_scroll_on_phase_live:
   lda formation_render_scroll_phase
+raster_irq_formation_scroll_on_phase_store:
   ora #VIC_CTRL2_TEXT_MULTICOLOR
   sta VIC_CTRL2
   jmp raster_irq_done
@@ -2628,9 +2650,18 @@ update_formation_shift_phase_store:
   sta formation_anchor_col
   cmp formation_render_anchor_col
   bne update_formation_shift_phase_store_done
-  lda formation_shift_phase
+  jsr load_active_formation_scroll_phase
   sta formation_render_scroll_phase
 update_formation_shift_phase_store_done:
+  rts
+
+load_active_formation_scroll_phase:
+  lda formation_force_zero_scroll_debug
+  beq load_active_formation_scroll_phase_live
+  lda #$00
+  rts
+load_active_formation_scroll_phase_live:
+  lda formation_shift_phase
   rts
 
 load_formation_slot_position:
@@ -2740,9 +2771,14 @@ store_player_explosion_sprite2_msb_done:
   rts
 
 render_formation:
-  jsr update_formation_shared_glyph_cache_if_needed
-  lda formation_shift_phase
-  sta formation_render_scroll_phase
+  lda raster_phase
+  sta formation_render_start_phase
+  lda RASTER
+  sta formation_render_start_raster
+  // Debug mode can disable hardware fine scroll so we can isolate the
+  // coarse-column wrap without the live scroll handoff.
+  jsr load_active_formation_scroll_phase
+  sta formation_render_work_scroll_phase
   lda #$00
   sta formation_char_render_mask_pending
   sta formation_char_render_mask_pending_hi
@@ -2770,6 +2806,13 @@ render_formation_slots:
 render_formation_slot_state_loop:
   jsr render_formation_char_slot_state
   inx
+  cpx #FORMATION_TOP_SLOT_COUNT
+  bne render_formation_slot_state_loop_check_done
+  lda raster_phase
+  sta formation_render_top_row_end_phase
+  lda RASTER
+  sta formation_render_top_row_end_raster
+render_formation_slot_state_loop_check_done:
   cpx #FORMATION_SLOT_COUNT
   bcc render_formation_slot_state_loop
   lda formation_char_render_mask_pending
@@ -2780,6 +2823,12 @@ render_formation_slot_state_loop:
   sta formation_char_render_mask_hi2
   lda formation_anchor_col
   sta formation_render_anchor_col
+  lda formation_render_work_scroll_phase
+  sta formation_render_scroll_phase
+  lda raster_phase
+  sta formation_render_end_phase
+  lda RASTER
+  sta formation_render_end_raster
   rts
 
 render_formation_char_slot_state:
@@ -2877,7 +2926,7 @@ draw_formation_char_slot_common_done:
 prepare_formation_char_slot_column:
   lda formation_char_relative_lo
   sec
-  sbc formation_render_scroll_phase
+  sbc formation_render_work_scroll_phase
   sta formation_char_relative_lo
   lda formation_char_relative_hi
   sbc #$00
@@ -3021,6 +3070,10 @@ update_formation_shared_glyph_cache_if_needed:
   lda formation_anim_index
   cmp formation_shared_cache_anim_index
   beq update_formation_shared_glyph_cache_if_needed_done
+  lda raster_phase
+  sta formation_shared_cache_update_start_phase
+  lda RASTER
+  sta formation_shared_cache_update_start_raster
 
   ldy formation_anim_index
   lda formation_anim_frame_offset_table, y
@@ -3062,13 +3115,19 @@ update_formation_shared_glyph_cache_if_needed_copy_loop:
 
   lda formation_anim_index
   sta formation_shared_cache_anim_index
+  inc formation_shared_cache_update_counter
+  lda raster_phase
+  sta formation_shared_cache_update_end_phase
+  lda RASTER
+  sta formation_shared_cache_update_end_raster
 update_formation_shared_glyph_cache_if_needed_done:
   rts
 
 load_formation_shared_glyph_base:
   lda formation_char_shift_phase_local
   and #%00000110
-  lsr
+  // The generated shared char pack keeps 4 effective phases: 0,2,4,6.
+  // Map those to phase indexes 0..3 when selecting the cached glyph block.
   lsr
   tay
   lda formation_slot_shared_type_table, x
@@ -3480,10 +3539,26 @@ formation_anchor_col:
   .byte $00
 formation_render_scroll_phase:
   .byte $00
+formation_render_work_scroll_phase:
+  .byte $00
+formation_force_zero_scroll_debug:
+  .byte $00
 formation_render_anchor_col:
   .byte $00
 formation_render_dirty:
   .byte $01
+formation_render_start_phase:
+  .byte $00
+formation_render_start_raster:
+  .byte $00
+formation_render_top_row_end_phase:
+  .byte $00
+formation_render_top_row_end_raster:
+  .byte $00
+formation_render_end_phase:
+  .byte $00
+formation_render_end_raster:
+  .byte $00
 formation_clear_strategy:
   .byte FORMATION_CLEAR_STRATEGY_ROWWISE
 formation_full_redraw_pending:
@@ -3642,6 +3717,16 @@ formation_char_render_mask_hi2:
   .byte $00
 formation_shared_cache_anim_index:
   .byte $ff
+formation_shared_cache_update_counter:
+  .byte $00
+formation_shared_cache_update_start_phase:
+  .byte $00
+formation_shared_cache_update_start_raster:
+  .byte $00
+formation_shared_cache_update_end_phase:
+  .byte $00
+formation_shared_cache_update_end_raster:
+  .byte $00
 formation_shared_type_frame_value_table:
   .fill FORMATION_SHARED_TYPE_COUNT, $00
 enemy_explosion_pointer:

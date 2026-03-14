@@ -6,6 +6,7 @@ import shutil
 import socket
 import time
 from pathlib import Path
+from typing import Optional
 
 from playtest_asm import Logger, PlaytestFailure, Playtester
 
@@ -14,6 +15,9 @@ CLEAR_STRATEGIES = {
     "edge_global": "FORMATION_CLEAR_STRATEGY_EDGE_GLOBAL",
     "rowwise": "FORMATION_CLEAR_STRATEGY_ROWWISE",
 }
+
+CAPTURE_LATCH_ARM = 0x01
+CAPTURE_LATCH_STEP = 0x02
 
 
 class RemoteTextMonitor:
@@ -93,7 +97,9 @@ def parse_args():
     parser.add_argument("--stage", choices=("ready", "play"), default="play")
     parser.add_argument("--duration-seconds", type=float, default=5.0)
     parser.add_argument("--sample-interval", type=float, default=0.12)
+    parser.add_argument("--frame-count", type=int)
     parser.add_argument("--clear-strategy", choices=tuple(CLEAR_STRATEGIES), default="rowwise")
+    parser.add_argument("--force-zero-scroll", action="store_true")
     parser.add_argument("--process-name", default="x64sc")
     parser.add_argument("--window-x", type=int, default=80)
     parser.add_argument("--window-y", type=int, default=80)
@@ -101,6 +107,8 @@ def parse_args():
     parser.add_argument("--window-height", type=int, default=638)
     parser.add_argument("--remote-monitor-address", default="ip4://127.0.0.1:6510")
     parser.add_argument("--screenshot-format", type=int, default=2)
+    parser.add_argument("--host-screenshots", action="store_true")
+    parser.add_argument("--frame-hold-seconds", type=float, default=0.0)
     return parser.parse_args()
 
 
@@ -123,15 +131,27 @@ def has_capture_latch(playtester: Playtester) -> bool:
 
 
 def arm_capture_latch(playtester: Playtester) -> None:
-    playtester.monitor.mem_set(playtester.symbols["frame_capture_latch_arm"], b"\x01")
+    playtester.monitor.mem_set(playtester.symbols["frame_capture_latch_arm"], bytes([CAPTURE_LATCH_ARM]))
 
 
-def wait_for_capture_latch(playtester: Playtester) -> None:
-    for _ in range(200):
-        if read_symbol_u8(playtester, "frame_capture_latch_ready") == 1:
+def step_capture_latch(playtester: Playtester) -> None:
+    playtester.monitor.mem_set(playtester.symbols["frame_capture_latch_arm"], bytes([CAPTURE_LATCH_STEP]))
+
+
+def wait_for_capture_latch(playtester: Playtester, previous_frame_counter: Optional[int] = None) -> None:
+    for _ in range(400):
+        latch_ready = read_symbol_u8(playtester, "frame_capture_latch_ready")
+        current_frame_counter = read_symbol_u8(playtester, "frame_capture_counter")
+        if latch_ready == 1 and (
+            previous_frame_counter is None or current_frame_counter != previous_frame_counter
+        ):
             return
-        playtester.resume_for(0.01)
-    raise PlaytestFailure("Timed out waiting for frame_capture_latch_ready")
+        playtester.resume_for(0.005)
+    raise PlaytestFailure(
+        "Timed out waiting for frame_capture_latch_ready"
+        if previous_frame_counter is None
+        else f"Timed out waiting for next latched frame after counter {previous_frame_counter}"
+    )
 
 
 def release_capture_latch(playtester: Playtester) -> None:
@@ -157,6 +177,18 @@ def apply_clear_strategy(playtester: Playtester, clear_strategy: str) -> int:
         bytes([strategy_value]),
     )
     return strategy_value
+
+
+def apply_force_zero_scroll(playtester: Playtester, enabled: bool) -> int:
+    if not enabled:
+        return 0
+    if "formation_force_zero_scroll_debug" not in playtester.symbols:
+        raise PlaytestFailure("formation_force_zero_scroll_debug symbol is missing from the build")
+    playtester.monitor.mem_set(
+        playtester.symbols["formation_force_zero_scroll_debug"],
+        b"\x01",
+    )
+    return 1
 
 
 def hold_ready_state(playtester: Playtester) -> None:
@@ -189,6 +221,60 @@ def screenshot_sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def capture_latched_review_sample(
+    playtester: Playtester,
+    remote_monitor: RemoteTextMonitor,
+    stage: str,
+    clear_strategy: str,
+    clear_strategy_value: int,
+    start_time: float,
+    frames_dir: Path,
+    screenshot_format: int,
+    capture_latched: bool,
+    previous_sample: Optional[dict],
+) -> dict:
+    sample = playtester.capture_sample(stage, include_joystick=False)
+    screenshot_path = frames_dir / f"{sample['index']:03d}-{stage}.png"
+    if sample.get("screenshot") is None:
+        remote_monitor.screenshot(screenshot_path, format_id=screenshot_format)
+        sample["screenshot"] = str(screenshot_path)
+        sample["screenshot_sha256"] = screenshot_sha256(screenshot_path)
+        sample["capture_mode"] = "vice_monitor"
+    formation_dir = read_symbol_u8(playtester, "formation_dir")
+    formation_frame = read_symbol_u8(playtester, "formation_frame")
+    if (
+        previous_sample is None
+        or previous_sample.get("frame_capture_counter") is None
+        or sample.get("frame_capture_counter") is None
+    ):
+        frame_advance = 0
+    else:
+        frame_advance = (
+            sample["frame_capture_counter"] - previous_sample["frame_capture_counter"]
+        ) & 0xFF
+    sample.update(
+        {
+            "clear_strategy": clear_strategy,
+            "clear_strategy_value": clear_strategy_value,
+            "force_zero_scroll": read_symbol_u8(playtester, "formation_force_zero_scroll_debug"),
+            "formation_frame": formation_frame,
+            "formation_dir": formation_dir,
+            "formation_dir_name": None if formation_dir is None else ("left" if formation_dir & 0x80 else "right"),
+            "formation_anchor_col": read_symbol_u8(playtester, "formation_anchor_col"),
+            "formation_render_anchor_col": read_symbol_u8(playtester, "formation_render_anchor_col"),
+            "formation_render_scroll_phase": read_symbol_u8(playtester, "formation_render_scroll_phase"),
+            "formation_render_dirty": read_symbol_u8(playtester, "formation_render_dirty"),
+            "formation_full_redraw_pending": read_symbol_u8(playtester, "formation_full_redraw_pending"),
+            "leftmost_x": playtester.leftmost_formation_x(sample),
+            "rightmost_x": rightmost_formation_x(playtester, sample),
+            "elapsed_seconds": round(time.time() - start_time, 4),
+            "capture_latched": capture_latched,
+            "frame_advance": frame_advance,
+        }
+    )
+    return sample
+
+
 def capture_review_sample(
     playtester: Playtester,
     remote_monitor: RemoteTextMonitor,
@@ -198,43 +284,30 @@ def capture_review_sample(
     start_time: float,
     frames_dir: Path,
     screenshot_format: int,
+    previous_sample: Optional[dict],
 ) -> dict:
     capture_latched = False
     try:
         if has_capture_latch(playtester):
+            previous_frame_counter = read_symbol_u8(playtester, "frame_capture_counter")
             arm_capture_latch(playtester)
-            wait_for_capture_latch(playtester)
+            wait_for_capture_latch(playtester, previous_frame_counter=previous_frame_counter)
             capture_latched = True
         else:
             playtester.wait_for_render_complete()
 
-        sample = playtester.capture_sample(stage, include_joystick=False)
-        screenshot_path = frames_dir / f"{sample['index']:03d}-{stage}.png"
-        remote_monitor.screenshot(screenshot_path, format_id=screenshot_format)
-        formation_dir = read_symbol_u8(playtester, "formation_dir")
-        formation_frame = read_symbol_u8(playtester, "formation_frame")
-        sample.update(
-            {
-                "clear_strategy": clear_strategy,
-                "clear_strategy_value": clear_strategy_value,
-                "formation_frame": formation_frame,
-                "formation_dir": formation_dir,
-                "formation_dir_name": None if formation_dir is None else ("left" if formation_dir & 0x80 else "right"),
-                "formation_anchor_col": read_symbol_u8(playtester, "formation_anchor_col"),
-                "formation_render_anchor_col": read_symbol_u8(playtester, "formation_render_anchor_col"),
-                "formation_render_scroll_phase": read_symbol_u8(playtester, "formation_render_scroll_phase"),
-                "formation_render_dirty": read_symbol_u8(playtester, "formation_render_dirty"),
-                "formation_full_redraw_pending": read_symbol_u8(playtester, "formation_full_redraw_pending"),
-                "leftmost_x": playtester.leftmost_formation_x(sample),
-                "rightmost_x": rightmost_formation_x(playtester, sample),
-                "elapsed_seconds": round(time.time() - start_time, 4),
-                "screenshot": str(screenshot_path),
-                "screenshot_sha256": screenshot_sha256(screenshot_path),
-                "capture_mode": "vice_monitor",
-                "capture_latched": capture_latched,
-            }
+        return capture_latched_review_sample(
+            playtester,
+            remote_monitor,
+            stage,
+            clear_strategy,
+            clear_strategy_value,
+            start_time,
+            frames_dir,
+            screenshot_format,
+            capture_latched=capture_latched,
+            previous_sample=previous_sample,
         )
-        return sample
     finally:
         if capture_latched:
             release_capture_latch(playtester)
@@ -254,7 +327,7 @@ def main() -> int:
     args.frames_dir = frames_dir
     args.keymap = output_dir / "capture.vkm"
     args.exit_screenshot = output_dir / "exit.png"
-    args.capture_host_screenshots = False
+    args.capture_host_screenshots = args.host_screenshots
 
     logger = Logger(args.log)
     playtester = Playtester(args, logger)
@@ -265,7 +338,9 @@ def main() -> int:
         "stage": args.stage,
         "duration_seconds": args.duration_seconds,
         "sample_interval": args.sample_interval,
+        "frame_count_target": args.frame_count,
         "clear_strategy": args.clear_strategy,
+        "force_zero_scroll": args.force_zero_scroll,
         "artifacts": {
             "dir": str(output_dir),
             "frames_dir": str(frames_dir),
@@ -273,8 +348,8 @@ def main() -> int:
             "vice_log": str(args.vice_log),
             "exit_screenshot": str(args.exit_screenshot),
             "keymap": str(args.keymap),
-            "capture_mode": "vice_monitor",
-            "capture_modes_seen": ["vice_monitor"],
+            "capture_mode": None if args.host_screenshots else "vice_monitor",
+            "capture_modes_seen": [] if args.host_screenshots else ["vice_monitor"],
         },
         "samples": [],
     }
@@ -284,16 +359,62 @@ def main() -> int:
         remote_monitor.connect()
         stage_sample = wait_for_stage(playtester, args.stage)
         clear_strategy_value = apply_clear_strategy(playtester, args.clear_strategy)
+        force_zero_scroll_value = apply_force_zero_scroll(playtester, args.force_zero_scroll)
         logger.log(
             f"Capturing {args.stage} review for {args.duration_seconds:.2f}s with {args.clear_strategy} via VICE screenshots"
         )
+        if force_zero_scroll_value:
+            logger.log("Enabled formation_force_zero_scroll_debug")
 
         if args.stage == "ready":
             hold_ready_state(playtester)
 
         start_time = time.time()
-        records["samples"].append(
-            capture_review_sample(
+        if args.frame_count is not None:
+            if args.frame_count <= 0:
+                raise PlaytestFailure(f"frame_count must be positive: {args.frame_count}")
+            if not has_capture_latch(playtester):
+                raise PlaytestFailure("frame_count capture requires frame_capture_latch support in the build")
+
+            logger.log(
+                f"Capturing {args.frame_count} consecutive frames at {args.stage} with {args.clear_strategy}"
+            )
+            previous_sample = None
+            previous_frame_counter = read_symbol_u8(playtester, "frame_capture_counter")
+            arm_capture_latch(playtester)
+            latch_armed = True
+            try:
+                for index in range(args.frame_count):
+                    if args.stage == "ready":
+                        hold_ready_state(playtester)
+                    wait_for_capture_latch(playtester, previous_frame_counter=previous_frame_counter)
+                    sample = capture_latched_review_sample(
+                        playtester,
+                        remote_monitor,
+                        args.stage,
+                        args.clear_strategy,
+                        clear_strategy_value,
+                        start_time,
+                        frames_dir,
+                        args.screenshot_format,
+                        capture_latched=True,
+                        previous_sample=previous_sample,
+                    )
+                    records["samples"].append(sample)
+                    previous_sample = sample
+                    previous_frame_counter = sample.get("frame_capture_counter")
+                    if index + 1 < args.frame_count:
+                        if args.frame_hold_seconds > 0:
+                            time.sleep(args.frame_hold_seconds)
+                        step_capture_latch(playtester)
+                    else:
+                        release_capture_latch(playtester)
+                        latch_armed = False
+            finally:
+                if latch_armed:
+                    release_capture_latch(playtester)
+        else:
+            previous_sample = capture_review_sample(
                 playtester,
                 remote_monitor,
                 args.stage,
@@ -302,21 +423,21 @@ def main() -> int:
                 start_time,
                 frames_dir,
                 args.screenshot_format,
+                previous_sample=None,
             )
-        )
+            records["samples"].append(previous_sample)
 
-        deadline = start_time + args.duration_seconds
-        while time.time() < deadline:
-            if args.stage == "ready":
-                hold_ready_state(playtester)
-            remaining = deadline - time.time()
-            sleep_seconds = min(args.sample_interval, remaining)
-            if sleep_seconds > 0:
-                playtester.resume_for(sleep_seconds)
-            if args.stage == "ready":
-                hold_ready_state(playtester)
-            records["samples"].append(
-                capture_review_sample(
+            deadline = start_time + args.duration_seconds
+            while time.time() < deadline:
+                if args.stage == "ready":
+                    hold_ready_state(playtester)
+                remaining = deadline - time.time()
+                sleep_seconds = min(args.sample_interval, remaining)
+                if sleep_seconds > 0:
+                    playtester.resume_for(sleep_seconds)
+                if args.stage == "ready":
+                    hold_ready_state(playtester)
+                previous_sample = capture_review_sample(
                     playtester,
                     remote_monitor,
                     args.stage,
@@ -325,11 +446,15 @@ def main() -> int:
                     start_time,
                     frames_dir,
                     args.screenshot_format,
+                    previous_sample=previous_sample,
                 )
-            )
+                records["samples"].append(previous_sample)
 
         records["success"] = True
         records["stage_sample"] = stage_sample
+        if args.host_screenshots:
+            records["artifacts"]["capture_mode"] = playtester.results["artifacts"]["capture_mode"]
+            records["artifacts"]["capture_modes_seen"] = playtester.results["artifacts"]["capture_modes_seen"]
     except Exception as exc:
         records["failure"] = str(exc)
         if playtester.samples:
@@ -342,18 +467,32 @@ def main() -> int:
             pass
         logger.close()
 
+    all_frame_advances_are_one = all(
+        sample.get("frame_advance") == 1 for sample in records["samples"][1:]
+    )
+    first_frame_counter = records["samples"][0].get("frame_capture_counter") if records["samples"] else None
+    last_frame_counter = records["samples"][-1].get("frame_capture_counter") if records["samples"] else None
+
     summary = {
         "success": records["success"],
         "failure": records["failure"],
         "frame_count": len(records["samples"]),
+        "frame_count_target": args.frame_count,
         "first_frame": records["samples"][0]["screenshot"] if records["samples"] else None,
         "last_frame": records["samples"][-1]["screenshot"] if records["samples"] else None,
         "start_elapsed": records["samples"][0]["elapsed_seconds"] if records["samples"] else None,
         "end_elapsed": records["samples"][-1]["elapsed_seconds"] if records["samples"] else None,
         "stage": args.stage,
         "clear_strategy": args.clear_strategy,
+        "force_zero_scroll": args.force_zero_scroll,
         "capture_mode": records["artifacts"]["capture_mode"],
         "capture_modes_seen": records["artifacts"]["capture_modes_seen"],
+        "all_frame_advances_are_one": all_frame_advances_are_one,
+        "first_frame_counter": first_frame_counter,
+        "last_frame_counter": last_frame_counter,
+        "frame_counter_span": None
+        if first_frame_counter is None or last_frame_counter is None
+        else ((last_frame_counter - first_frame_counter) & 0xFF),
     }
 
     records["artifacts"]["exit_screenshot_exists"] = args.exit_screenshot.exists()
