@@ -2,7 +2,9 @@ BasicUpstart2(start)
 
 .label VIC_BANK_SELECT = $dd00
 .label SCREEN_RAM = $0400
+.label SCREEN_RAM_ALT = $0c00
 .label SPRITE_POINTERS = SCREEN_RAM + $03f8
+.label SPRITE_POINTERS_ALT = SCREEN_RAM_ALT + $03f8
 .label COLOR_RAM = $d800
 .label BORDER_COLOR = $d020
 .label BACKGROUND_COLOR = $d021
@@ -16,6 +18,8 @@ BasicUpstart2(start)
 .label BACKGROUND_MULTICOLOR_1 = $d022
 .label BACKGROUND_MULTICOLOR_2 = $d023
 .label MEMORY_SETUP = $d018
+.label MEMORY_SETUP_PAGE0 = $12
+.label MEMORY_SETUP_PAGE1 = $32
 .label SPRITE_ENABLE = $d015
 .label SPRITE_X_MSB = $d010
 .label SPRITE_PRIORITY = $d01b
@@ -314,6 +318,12 @@ start:
   jsr init_enemy_fire
   jsr init_raster_irq
   jsr start_new_game
+  jsr update_formation_shared_glyph_cache_if_needed
+  jsr render_formation_if_dirty
+  jsr copy_formation_band_page0_to_page1
+  jsr load_formation_render_page1
+  lda #$00
+  sta screen_flip_pending
   cli
 
 main_loop:
@@ -362,6 +372,8 @@ render_formation_if_dirty:
   lda formation_render_dirty
   beq render_formation_if_dirty_done
   jsr render_formation
+  lda #$01
+  sta screen_flip_pending
   lda #$00
   sta formation_render_dirty
 render_formation_if_dirty_done:
@@ -377,13 +389,88 @@ init_vic:
   sta VIC_CTRL1
   lda #VIC_CTRL2_TEXT_MULTICOLOR
   sta VIC_CTRL2
-  lda #$12
+  lda #MEMORY_SETUP_PAGE0
   sta MEMORY_SETUP
+  lda #$00
+  sta active_screen_is_alt
+  sta screen_flip_pending
+  jsr load_formation_render_page0
 
   lda #$00
   sta BACKGROUND_COLOR
   lda #BORDER_BASE_COLOR
   sta BORDER_COLOR
+  rts
+
+load_formation_render_page0:
+  ldx #$00
+load_formation_render_page0_loop:
+  lda screen_page0_row_hi, x
+  sta screen_row_hi, x
+  inx
+  cpx #25
+  bcc load_formation_render_page0_loop
+  rts
+
+load_formation_render_page1:
+  ldx #$00
+load_formation_render_page1_loop:
+  lda screen_page1_row_hi, x
+  sta screen_row_hi, x
+  inx
+  cpx #25
+  bcc load_formation_render_page1_loop
+  rts
+
+commit_screen_page_flip_if_needed:
+  lda screen_flip_pending
+  beq commit_screen_page_flip_if_needed_done
+
+  lda active_screen_is_alt
+  eor #$01
+  sta active_screen_is_alt
+  beq commit_screen_page_flip_page0
+
+  lda #MEMORY_SETUP_PAGE1
+  sta MEMORY_SETUP
+  jsr load_formation_render_page0
+  lda #$00
+  sta screen_flip_pending
+  rts
+
+commit_screen_page_flip_page0:
+  lda #MEMORY_SETUP_PAGE0
+  sta MEMORY_SETUP
+  jsr load_formation_render_page1
+  lda #$00
+  sta screen_flip_pending
+commit_screen_page_flip_if_needed_done:
+  rts
+
+copy_formation_band_page0_to_page1:
+  ldx #$00
+copy_formation_band_page0_to_page1_loop:
+  lda formation_char_band_rows, x
+  tay
+  lda screen_row_lo, y
+  sta SCREEN_PTR
+  sta COLOR_PTR
+  lda screen_page0_row_hi, y
+  sta SCREEN_PTR + 1
+  lda screen_page1_row_hi, y
+  sta COLOR_PTR + 1
+
+  ldy #FORMATION_CHAR_BAND_ORIGIN_COL
+copy_formation_band_page0_to_page1_row_loop:
+  lda (SCREEN_PTR), y
+  sta (COLOR_PTR), y
+  iny
+  cpy #(FORMATION_CHAR_BAND_ORIGIN_COL + FORMATION_CHAR_BAND_WIDTH)
+  bcc copy_formation_band_page0_to_page1_row_loop
+
+  inx
+  cpx #FORMATION_CHAR_BAND_HEIGHT
+  bcc copy_formation_band_page0_to_page1_loop
   rts
 
 init_charset:
@@ -436,9 +523,13 @@ clear_screen:
 clear_loop:
   lda #$20
   sta SCREEN_RAM + $000, x
+  sta SCREEN_RAM_ALT + $000, x
   sta SCREEN_RAM + $100, x
+  sta SCREEN_RAM_ALT + $100, x
   sta SCREEN_RAM + $200, x
+  sta SCREEN_RAM_ALT + $200, x
   sta SCREEN_RAM + $300, x
+  sta SCREEN_RAM_ALT + $300, x
 
   lda #PLAYFIELD_TEXT_COLOR
   sta COLOR_RAM + $000, x
@@ -456,6 +547,7 @@ hud_loop:
   lda hud_row0, x
   beq hud_done
   sta SCREEN_RAM, x
+  sta SCREEN_RAM_ALT, x
   lda #HUD_TEXT_COLOR
   sta COLOR_RAM, x
   inx
@@ -494,6 +586,7 @@ write_bcd_score_digits:
   clc
   adc #$30
   sta SCREEN_RAM, x
+  sta SCREEN_RAM_ALT, x
   lda #HUD_TEXT_COLOR
   sta COLOR_RAM, x
   inx
@@ -502,6 +595,7 @@ write_bcd_score_digits:
   clc
   adc #$30
   sta SCREEN_RAM, x
+  sta SCREEN_RAM_ALT, x
   lda #HUD_TEXT_COLOR
   sta COLOR_RAM, x
   rts
@@ -515,6 +609,7 @@ update_lives_display_store:
   clc
   adc #$30
   sta SCREEN_RAM + HUD_LIVES_COL
+  sta SCREEN_RAM_ALT + HUD_LIVES_COL
   lda #HUD_TEXT_COLOR
   sta COLOR_RAM + HUD_LIVES_COL
   rts
@@ -524,7 +619,9 @@ clear_status_area:
 clear_status_area_loop:
   lda #$20
   sta SCREEN_RAM + (STATUS_ROW * 40), x
+  sta SCREEN_RAM_ALT + (STATUS_ROW * 40), x
   sta SCREEN_RAM + (STATUS_PROMPT_ROW * 40), x
+  sta SCREEN_RAM_ALT + (STATUS_PROMPT_ROW * 40), x
   lda #PLAYFIELD_TEXT_COLOR
   sta COLOR_RAM + (STATUS_ROW * 40), x
   sta COLOR_RAM + (STATUS_PROMPT_ROW * 40), x
@@ -540,6 +637,7 @@ show_ready_message_loop:
   lda ready_message, x
   beq show_ready_message_done
   sta SCREEN_RAM + (STATUS_ROW * 40) + READY_MESSAGE_COL, x
+  sta SCREEN_RAM_ALT + (STATUS_ROW * 40) + READY_MESSAGE_COL, x
   lda #HUD_TEXT_COLOR
   sta COLOR_RAM + (STATUS_ROW * 40) + READY_MESSAGE_COL, x
   inx
@@ -554,6 +652,7 @@ show_wave_clear_message_loop:
   lda wave_clear_message, x
   beq show_wave_clear_message_done
   sta SCREEN_RAM + (STATUS_ROW * 40) + WAVE_CLEAR_MESSAGE_COL, x
+  sta SCREEN_RAM_ALT + (STATUS_ROW * 40) + WAVE_CLEAR_MESSAGE_COL, x
   lda #HUD_TEXT_COLOR
   sta COLOR_RAM + (STATUS_ROW * 40) + WAVE_CLEAR_MESSAGE_COL, x
   inx
@@ -568,6 +667,7 @@ show_game_over_message_loop:
   lda game_over_message, x
   beq show_game_over_message_done
   sta SCREEN_RAM + (STATUS_ROW * 40) + GAME_OVER_MESSAGE_COL, x
+  sta SCREEN_RAM_ALT + (STATUS_ROW * 40) + GAME_OVER_MESSAGE_COL, x
   lda #HUD_TEXT_COLOR
   sta COLOR_RAM + (STATUS_ROW * 40) + GAME_OVER_MESSAGE_COL, x
   inx
@@ -581,6 +681,7 @@ show_press_fire_message_loop:
   lda press_fire_message, x
   beq show_press_fire_message_done
   sta SCREEN_RAM + (STATUS_PROMPT_ROW * 40) + PRESS_FIRE_MESSAGE_COL, x
+  sta SCREEN_RAM_ALT + (STATUS_PROMPT_ROW * 40) + PRESS_FIRE_MESSAGE_COL, x
   lda #HUD_TEXT_COLOR
   sta COLOR_RAM + (STATUS_PROMPT_ROW * 40) + PRESS_FIRE_MESSAGE_COL, x
   inx
@@ -677,7 +778,7 @@ restore_player_ship:
   sta enemy_attack_active
 
   lda #PLAYER_RED_SPRITE_PTR
-  sta SPRITE_POINTERS + 1
+  jsr store_sprite_pointer_1
 
   lda #PLAYER_START_X_LO
   sta player_x_lo
@@ -714,7 +815,7 @@ hide_player_ship:
 
 init_shot:
   lda #SHOT_SPRITE_PTR
-  sta SPRITE_POINTERS + 2
+  jsr store_sprite_pointer_2
 
   lda #SHOT_COLOR
   sta SPRITE2_COLOR
@@ -873,6 +974,7 @@ raster_irq_top_phase:
   sta raster_phase
   lda #FORMATION_SCROLL_START_RASTER
   sta RASTER
+  jsr commit_screen_page_flip_if_needed
   lda #VIC_CTRL2_TEXT_MULTICOLOR
   sta VIC_CTRL2
   lda #FORMATION_MULTI0_COLOR
@@ -1882,7 +1984,16 @@ draw_enemy_bullet_cell:
   ldy enemy_bullet_row
   lda screen_row_lo, y
   sta SCREEN_PTR
-  lda screen_row_hi, y
+  lda screen_page0_row_hi, y
+  sta SCREEN_PTR + 1
+  ldy enemy_bullet_col
+  lda enemy_bullet_char
+  sta (SCREEN_PTR), y
+
+  ldy enemy_bullet_row
+  lda screen_row_lo, y
+  sta SCREEN_PTR
+  lda screen_page1_row_hi, y
   sta SCREEN_PTR + 1
   ldy enemy_bullet_col
   lda enemy_bullet_char
@@ -1903,7 +2014,16 @@ erase_enemy_bullet_cell:
   ldy enemy_bullet_row
   lda screen_row_lo, y
   sta SCREEN_PTR
-  lda screen_row_hi, y
+  lda screen_page0_row_hi, y
+  sta SCREEN_PTR + 1
+  ldy enemy_bullet_col
+  lda #$20
+  sta (SCREEN_PTR), y
+
+  ldy enemy_bullet_row
+  lda screen_row_lo, y
+  sta SCREEN_PTR
+  lda screen_page1_row_hi, y
   sta SCREEN_PTR + 1
   ldy enemy_bullet_col
   lda #$20
@@ -2393,7 +2513,7 @@ target_miss:
 
 spawn_player_shot:
   lda #SHOT_SPRITE_PTR
-  sta SPRITE_POINTERS + 2
+  jsr store_sprite_pointer_2
   lda #SHOT_COLOR
   sta SPRITE2_COLOR
   lda SPRITE_MULTICOLOR
@@ -2729,7 +2849,7 @@ store_player_explosion_sprite1:
 store_player_explosion_sprite1_msb_done:
   sta SPRITE_X_MSB
   lda player_explosion_top_left_pointer
-  sta SPRITE_POINTERS + 1
+  jsr store_sprite_pointer_1
   lda #PLAYER_EXPLOSION_COLOR
   sta SPRITE1_COLOR
   lda SPRITE_MULTICOLOR
@@ -2759,7 +2879,7 @@ store_player_explosion_sprite2:
 store_player_explosion_sprite2_msb_done:
   sta SPRITE_X_MSB
   lda player_explosion_top_right_pointer
-  sta SPRITE_POINTERS + 2
+  jsr store_sprite_pointer_2
   lda #PLAYER_EXPLOSION_COLOR
   sta SPRITE2_COLOR
   lda SPRITE_MULTICOLOR
@@ -3527,6 +3647,10 @@ player_effect_color:
   .byte $00
 raster_phase:
   .byte RASTER_PHASE_TOP
+active_screen_is_alt:
+  .byte $00
+screen_flip_pending:
+  .byte $00
 player_extra_visible:
   .byte $00
 player_bottom_sprite_mask_debug:
@@ -3938,6 +4062,14 @@ screen_row_hi:
   .for (var row = 0; row < 25; row++) {
     .byte >(SCREEN_RAM + (row * 40))
   }
+screen_page0_row_hi:
+  .for (var row = 0; row < 25; row++) {
+    .byte >(SCREEN_RAM + (row * 40))
+  }
+screen_page1_row_hi:
+  .for (var row = 0; row < 25; row++) {
+    .byte >(SCREEN_RAM_ALT + (row * 40))
+  }
 color_row_lo:
   .for (var row = 0; row < 25; row++) {
     .byte <(COLOR_RAM + (row * 40))
@@ -3948,6 +4080,46 @@ color_row_hi:
   }
 
 * = $5a00 "Char Mode Sprite Routines"
+
+store_sprite_pointer_0:
+  sta SPRITE_POINTERS
+  sta SPRITE_POINTERS_ALT
+  rts
+
+store_sprite_pointer_1:
+  sta SPRITE_POINTERS + 1
+  sta SPRITE_POINTERS_ALT + 1
+  rts
+
+store_sprite_pointer_2:
+  sta SPRITE_POINTERS + 2
+  sta SPRITE_POINTERS_ALT + 2
+  rts
+
+store_sprite_pointer_3:
+  sta SPRITE_POINTERS + 3
+  sta SPRITE_POINTERS_ALT + 3
+  rts
+
+store_sprite_pointer_4:
+  sta SPRITE_POINTERS + 4
+  sta SPRITE_POINTERS_ALT + 4
+  rts
+
+store_sprite_pointer_5:
+  sta SPRITE_POINTERS + 5
+  sta SPRITE_POINTERS_ALT + 5
+  rts
+
+store_sprite_pointer_6:
+  sta SPRITE_POINTERS + 6
+  sta SPRITE_POINTERS_ALT + 6
+  rts
+
+store_sprite_pointer_7:
+  sta SPRITE_POINTERS + 7
+  sta SPRITE_POINTERS_ALT + 7
+  rts
 
 load_slot_visual_y:
   lda formation_slot_visual_y_table, x
@@ -4051,7 +4223,7 @@ store_dive_position_char:
 store_dive_position_char_done:
   sta SPRITE_X_MSB
   lda dive_sprite_pointer
-  sta SPRITE_POINTERS
+  jsr store_sprite_pointer_0
   lda dive_sprite_color
   sta SPRITE0_COLOR
   lda SPRITE_MULTICOLOR
@@ -4075,7 +4247,7 @@ store_char_mode_player_bottom_left:
 store_char_mode_player_bottom_left_msb_done:
   sta SPRITE_X_MSB
   lda #PLAYER_WHITE_SPRITE_PTR
-  sta SPRITE_POINTERS + 3
+  jsr store_sprite_pointer_3
   lda #PLAYER_WHITE_COLOR
   sta SPRITE3_COLOR
   lda SPRITE_MULTICOLOR
@@ -4099,7 +4271,7 @@ store_char_mode_player_bottom_right:
 store_char_mode_player_bottom_right_msb_done:
   sta SPRITE_X_MSB
   lda #PLAYER_CYAN_SPRITE_PTR
-  sta SPRITE_POINTERS + 4
+  jsr store_sprite_pointer_4
   lda #PLAYER_CYAN_COLOR
   sta SPRITE4_COLOR
   lda SPRITE_MULTICOLOR
@@ -4125,7 +4297,7 @@ store_char_mode_player_explosion_bottom_left:
 store_char_mode_player_explosion_bottom_left_msb_done:
   sta SPRITE_X_MSB
   lda player_effect_pointer
-  sta SPRITE_POINTERS + 3
+  jsr store_sprite_pointer_3
   lda player_effect_color
   sta SPRITE3_COLOR
   lda SPRITE_MULTICOLOR
@@ -4149,7 +4321,7 @@ store_char_mode_player_explosion_bottom_right:
 store_char_mode_player_explosion_bottom_right_msb_done:
   sta SPRITE_X_MSB
   lda player_effect_pointer
-  sta SPRITE_POINTERS + 4
+  jsr store_sprite_pointer_4
   lda player_effect_color
   sta SPRITE4_COLOR
   lda SPRITE_MULTICOLOR
@@ -4303,7 +4475,7 @@ store_char_mode_enemy_effect_slot0_msb_done:
   and #%11110111
   sta SPRITE_MULTICOLOR
   lda enemy_explosion_pointer
-  sta SPRITE_POINTERS + 3
+  jsr store_sprite_pointer_3
   lda #ENEMY_EXPLOSION_COLOR
   sta SPRITE3_COLOR
   lda SPRITE_ENABLE
@@ -4327,7 +4499,7 @@ store_char_mode_enemy_effect_slot1_msb_done:
   and #%11101111
   sta SPRITE_MULTICOLOR
   lda enemy_explosion_pointer
-  sta SPRITE_POINTERS + 4
+  jsr store_sprite_pointer_4
   lda #ENEMY_EXPLOSION_COLOR
   sta SPRITE4_COLOR
   lda SPRITE_ENABLE
@@ -4351,7 +4523,7 @@ store_char_mode_enemy_effect_slot2_msb_done:
   and #%11011111
   sta SPRITE_MULTICOLOR
   lda enemy_explosion_pointer
-  sta SPRITE_POINTERS + 5
+  jsr store_sprite_pointer_5
   lda #ENEMY_EXPLOSION_COLOR
   sta SPRITE5_COLOR
   lda SPRITE_ENABLE
@@ -4375,7 +4547,7 @@ store_char_mode_enemy_effect_slot3_msb_done:
   and #%10111111
   sta SPRITE_MULTICOLOR
   lda enemy_explosion_pointer
-  sta SPRITE_POINTERS + 6
+  jsr store_sprite_pointer_6
   lda #ENEMY_EXPLOSION_COLOR
   sta SPRITE6_COLOR
   lda SPRITE_ENABLE
@@ -4399,7 +4571,7 @@ store_char_mode_enemy_effect_slot4_msb_done:
   and #%01111111
   sta SPRITE_MULTICOLOR
   lda enemy_explosion_pointer
-  sta SPRITE_POINTERS + 7
+  jsr store_sprite_pointer_7
   lda #ENEMY_EXPLOSION_COLOR
   sta SPRITE7_COLOR
   lda SPRITE_ENABLE

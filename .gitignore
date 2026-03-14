@@ -7,3 +7,4 @@ src/generated_arcade_sprites.bin
 .codex/
 .codex-tools/
 .npm-local-cache/
+.DS_Store
