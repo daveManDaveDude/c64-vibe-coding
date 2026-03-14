@@ -2,7 +2,7 @@ BasicUpstart2(start)
 
 .label VIC_BANK_SELECT = $dd00
 .label SCREEN_RAM = $0400
-.label SCREEN_RAM_ALT = $0c00
+.label SCREEN_RAM_ALT = $2000
 .label SPRITE_POINTERS = SCREEN_RAM + $03f8
 .label SPRITE_POINTERS_ALT = SCREEN_RAM_ALT + $03f8
 .label COLOR_RAM = $d800
@@ -19,7 +19,7 @@ BasicUpstart2(start)
 .label BACKGROUND_MULTICOLOR_2 = $d023
 .label MEMORY_SETUP = $d018
 .label MEMORY_SETUP_PAGE0 = $12
-.label MEMORY_SETUP_PAGE1 = $32
+.label MEMORY_SETUP_PAGE1 = $82
 .label SPRITE_ENABLE = $d015
 .label SPRITE_X_MSB = $d010
 .label SPRITE_PRIORITY = $d01b
@@ -226,6 +226,7 @@ BasicUpstart2(start)
 .label SCORE_GRUNT_HI = $00
 .label FORMATION_ANIMATION_SHIFT = 5
 .label FORMATION_SHARED_CHAR_BASE = 96
+.label FORMATION_SHARED_CHAR_BASE_PAGE1 = 160
 .label FORMATION_CHAR_SLOT_STRIDE = 4
 .label FORMATION_CHAR_SLOT_BYTE_COUNT = FORMATION_CHAR_SLOT_STRIDE * 8
 .label FORMATION_SHARED_PHASE_COUNT = 4
@@ -257,7 +258,8 @@ BasicUpstart2(start)
 .label DIVE_ANIMATION_MAX_FRAME = 9
 .label DIVE_FIRE_HOLD_TICKS = 10
 .label ENEMY_BULLET_LIMIT = 2
-.label ENEMY_BULLET_CHAR_BASE = 192
+.label ENEMY_BULLET_CHAR_BASE_LOW = 64
+.label ENEMY_BULLET_CHAR_BASE_HIGH = 224
 .label ENEMY_BULLET_COLOR = $01
 .label ENEMY_BULLET_SPEED = 2
 .label ENEMY_BULLET_START_X_OFFSET = 11
@@ -320,8 +322,9 @@ start:
   jsr start_new_game
   jsr update_formation_shared_glyph_cache_if_needed
   jsr render_formation_if_dirty
-  jsr copy_formation_band_page0_to_page1
   jsr load_formation_render_page1
+  jsr update_formation_shared_glyph_cache_if_needed
+  jsr render_formation
   lda #$00
   sta screen_flip_pending
   cli
@@ -410,6 +413,10 @@ load_formation_render_page0_loop:
   inx
   cpx #25
   bcc load_formation_render_page0_loop
+  lda #FORMATION_SHARED_CHAR_BASE
+  sta formation_render_shared_char_base
+  lda #$00
+  sta formation_render_page_is_alt
   rts
 
 load_formation_render_page1:
@@ -420,6 +427,10 @@ load_formation_render_page1_loop:
   inx
   cpx #25
   bcc load_formation_render_page1_loop
+  lda #FORMATION_SHARED_CHAR_BASE_PAGE1
+  sta formation_render_shared_char_base
+  lda #$01
+  sta formation_render_page_is_alt
   rts
 
 commit_screen_page_flip_if_needed:
@@ -473,6 +484,35 @@ copy_formation_band_page0_to_page1_row_loop:
   bcc copy_formation_band_page0_to_page1_loop
   rts
 
+copy_visible_formation_band_to_render_page:
+  lda active_screen_is_alt
+  beq copy_formation_band_page0_to_page1
+
+  ldx #$00
+copy_formation_band_page1_to_page0_loop:
+  lda formation_char_band_rows, x
+  tay
+  lda screen_row_lo, y
+  sta SCREEN_PTR
+  sta COLOR_PTR
+  lda screen_page1_row_hi, y
+  sta SCREEN_PTR + 1
+  lda screen_page0_row_hi, y
+  sta COLOR_PTR + 1
+
+  ldy #FORMATION_CHAR_BAND_ORIGIN_COL
+copy_formation_band_page1_to_page0_row_loop:
+  lda (SCREEN_PTR), y
+  sta (COLOR_PTR), y
+  iny
+  cpy #(FORMATION_CHAR_BAND_ORIGIN_COL + FORMATION_CHAR_BAND_WIDTH)
+  bcc copy_formation_band_page1_to_page0_row_loop
+
+  inx
+  cpx #FORMATION_CHAR_BAND_HEIGHT
+  bcc copy_formation_band_page1_to_page0_loop
+  rts
+
 init_charset:
   lda CPU_PORT
   sta cpu_port_backup
@@ -504,18 +544,18 @@ copy_charset_loop:
   sta CPU_PORT
 
   ldx #$00
-copy_enemy_bullet_charset_page0:
+copy_enemy_bullet_charset_low:
   lda enemy_bullet_charset, x
-  sta CHARSET_RAM + (ENEMY_BULLET_CHAR_BASE * 8), x
+  sta CHARSET_RAM + (ENEMY_BULLET_CHAR_BASE_LOW * 8), x
   inx
-  bne copy_enemy_bullet_charset_page0
+  bne copy_enemy_bullet_charset_low
 
   ldx #$00
-copy_enemy_bullet_charset_page1:
+copy_enemy_bullet_charset_high:
   lda enemy_bullet_charset + $100, x
-  sta CHARSET_RAM + (ENEMY_BULLET_CHAR_BASE * 8) + $100, x
+  sta CHARSET_RAM + (ENEMY_BULLET_CHAR_BASE_HIGH * 8), x
   inx
-  bne copy_enemy_bullet_charset_page1
+  bne copy_enemy_bullet_charset_high
   rts
 
 clear_screen:
@@ -2066,8 +2106,17 @@ compute_enemy_bullet_cell:
   and #%00000111
   clc
   adc enemy_bullet_char
+  cmp #$20
+  bcc enemy_bullet_char_low_range
+  sec
+  sbc #$20
   clc
-  adc #ENEMY_BULLET_CHAR_BASE
+  adc #ENEMY_BULLET_CHAR_BASE_HIGH
+  bne enemy_bullet_char_store
+enemy_bullet_char_low_range:
+  clc
+  adc #ENEMY_BULLET_CHAR_BASE_LOW
+enemy_bullet_char_store:
   sta enemy_bullet_char
 
   lda enemy_bullet_row
@@ -2511,6 +2560,8 @@ target_miss:
   clc
   rts
 
+* = $4600 "Main Program Tail"
+// Keep the hidden screen page at $2000-$23ff free for page flipping.
 spawn_player_shot:
   lda #SHOT_SPRITE_PTR
   jsr store_sprite_pointer_2
@@ -2919,7 +2970,6 @@ render_formation_check_edge_clear:
   jsr clear_formation_char_exposed_columns_global
   jmp render_formation_slots
 render_formation_edge_clear_rowwise:
-  jsr clear_formation_char_top_row_slots_saved
   jsr clear_formation_char_exposed_columns_rowwise
 render_formation_slots:
   ldx #$00
@@ -3187,9 +3237,18 @@ clear_formation_char_top_row_slots_saved_loop:
   rts
 
 update_formation_shared_glyph_cache_if_needed:
+  lda formation_render_page_is_alt
+  beq update_formation_shared_glyph_cache_if_needed_page0
   lda formation_anim_index
-  cmp formation_shared_cache_anim_index
-  beq update_formation_shared_glyph_cache_if_needed_done
+  cmp formation_shared_cache_anim_index_page1
+  bne update_formation_shared_glyph_cache_if_needed_begin
+  jmp update_formation_shared_glyph_cache_if_needed_done
+update_formation_shared_glyph_cache_if_needed_page0:
+  lda formation_anim_index
+  cmp formation_shared_cache_anim_index_page0
+  bne update_formation_shared_glyph_cache_if_needed_begin
+  jmp update_formation_shared_glyph_cache_if_needed_done
+update_formation_shared_glyph_cache_if_needed_begin:
   lda raster_phase
   sta formation_shared_cache_update_start_phase
   lda RASTER
@@ -3216,11 +3275,19 @@ update_formation_shared_glyph_cache_if_needed_loop:
   sta SCREEN_PTR + 1
   lda formation_shared_block_phase_offset_table, x
   sta SCREEN_PTR
+  lda formation_render_page_is_alt
+  beq update_formation_shared_glyph_cache_if_needed_page0_addr
+  lda formation_shared_block_addr_page1_lo_table, x
+  sta COLOR_PTR
+  lda formation_shared_block_addr_page1_hi_table, x
+  sta COLOR_PTR + 1
+  jmp update_formation_shared_glyph_cache_if_needed_addr_ready
+update_formation_shared_glyph_cache_if_needed_page0_addr:
   lda formation_shared_block_addr_lo_table, x
   sta COLOR_PTR
   lda formation_shared_block_addr_hi_table, x
   sta COLOR_PTR + 1
-
+update_formation_shared_glyph_cache_if_needed_addr_ready:
   ldy #$00
 update_formation_shared_glyph_cache_if_needed_copy_loop:
   lda (SCREEN_PTR), y
@@ -3234,7 +3301,13 @@ update_formation_shared_glyph_cache_if_needed_copy_loop:
   bcc update_formation_shared_glyph_cache_if_needed_loop
 
   lda formation_anim_index
-  sta formation_shared_cache_anim_index
+  ldy formation_render_page_is_alt
+  beq update_formation_shared_glyph_cache_if_needed_store_page0
+  sta formation_shared_cache_anim_index_page1
+  jmp update_formation_shared_glyph_cache_if_needed_store_done
+update_formation_shared_glyph_cache_if_needed_store_page0:
+  sta formation_shared_cache_anim_index_page0
+update_formation_shared_glyph_cache_if_needed_store_done:
   inc formation_shared_cache_update_counter
   lda raster_phase
   sta formation_shared_cache_update_end_phase
@@ -3258,7 +3331,7 @@ load_formation_shared_glyph_base:
   clc
   adc formation_shared_phase_char_offset_table, y
   clc
-  adc #FORMATION_SHARED_CHAR_BASE
+  adc formation_render_shared_char_base
   sta formation_char_glyph_base
   rts
 
@@ -3268,6 +3341,8 @@ clear_formation_char_slot_glyphs:
 clear_formation_char_slot_glyphs_loop:
   sta CHARSET_RAM + (FORMATION_SHARED_CHAR_BASE * 8), x
   sta CHARSET_RAM + (FORMATION_SHARED_CHAR_BASE * 8) + $100, x
+  sta CHARSET_RAM + (FORMATION_SHARED_CHAR_BASE_PAGE1 * 8), x
+  sta CHARSET_RAM + (FORMATION_SHARED_CHAR_BASE_PAGE1 * 8) + $100, x
   inx
   bne clear_formation_char_slot_glyphs_loop
   rts
@@ -3839,7 +3914,13 @@ formation_char_render_mask_hi:
   .byte $00
 formation_char_render_mask_hi2:
   .byte $00
-formation_shared_cache_anim_index:
+formation_render_shared_char_base:
+  .byte FORMATION_SHARED_CHAR_BASE
+formation_render_page_is_alt:
+  .byte $00
+formation_shared_cache_anim_index_page0:
+  .byte $ff
+formation_shared_cache_anim_index_page1:
   .byte $ff
 formation_shared_cache_update_counter:
   .byte $00
@@ -3994,6 +4075,10 @@ formation_shared_block_addr_lo_table:
   .fill FORMATION_SHARED_BLOCK_COUNT, <(CHARSET_RAM + ((FORMATION_SHARED_CHAR_BASE + (i * FORMATION_CHAR_SLOT_STRIDE)) * 8))
 formation_shared_block_addr_hi_table:
   .fill FORMATION_SHARED_BLOCK_COUNT, >(CHARSET_RAM + ((FORMATION_SHARED_CHAR_BASE + (i * FORMATION_CHAR_SLOT_STRIDE)) * 8))
+formation_shared_block_addr_page1_lo_table:
+  .fill FORMATION_SHARED_BLOCK_COUNT, <(CHARSET_RAM + ((FORMATION_SHARED_CHAR_BASE_PAGE1 + (i * FORMATION_CHAR_SLOT_STRIDE)) * 8))
+formation_shared_block_addr_page1_hi_table:
+  .fill FORMATION_SHARED_BLOCK_COUNT, >(CHARSET_RAM + ((FORMATION_SHARED_CHAR_BASE_PAGE1 + (i * FORMATION_CHAR_SLOT_STRIDE)) * 8))
 formation_slot_shared_type_table:
   .byte 3,3
   .byte 0,0,0,0,0

@@ -109,6 +109,12 @@ def parse_args():
     parser.add_argument("--screenshot-format", type=int, default=2)
     parser.add_argument("--host-screenshots", action="store_true")
     parser.add_argument("--frame-hold-seconds", type=float, default=0.0)
+    parser.add_argument("--log-top-page-rows", action="store_true")
+    parser.add_argument(
+        "--top-page-rows",
+        help="Comma-separated screen row indexes to compare between page 0 and page 1. "
+        "Defaults to the upper seam rows around FORMATION_ROW0/1_CHAR_ROW.",
+    )
     return parser.parse_args()
 
 
@@ -221,6 +227,111 @@ def screenshot_sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def parse_top_page_rows(row_text: Optional[str]) -> Optional[list[int]]:
+    if row_text is None:
+        return None
+    rows = []
+    for item in row_text.split(","):
+        stripped = item.strip()
+        if not stripped:
+            continue
+        try:
+            row = int(stripped, 10)
+        except ValueError as exc:
+            raise PlaytestFailure(f"Invalid screen row in --top-page-rows: {stripped}") from exc
+        if row < 0 or row >= 25:
+            raise PlaytestFailure(f"Screen row out of range in --top-page-rows: {row}")
+        rows.append(row)
+    if not rows:
+        raise PlaytestFailure("--top-page-rows did not contain any valid rows")
+    return sorted(set(rows))
+
+
+def default_top_page_rows(playtester: Playtester) -> list[int]:
+    row0 = playtester.symbols.get("FORMATION_ROW0_CHAR_ROW")
+    row1 = playtester.symbols.get("FORMATION_ROW1_CHAR_ROW")
+    candidates = []
+    if row0 is not None:
+        candidates.extend([row0 - 2, row0 - 1, row0, row0 + 1])
+    if row1 is not None:
+        candidates.extend([row1, row1 + 1])
+    rows = sorted({row for row in candidates if 0 <= row < 25})
+    return rows or [2, 3, 4, 5, 6, 7]
+
+
+def diff_ranges(diff_cols: list[int]) -> list[list[int]]:
+    if not diff_cols:
+        return []
+    ranges = []
+    start = diff_cols[0]
+    end = start
+    for col in diff_cols[1:]:
+        if col == end + 1:
+            end = col
+            continue
+        ranges.append([start, end])
+        start = col
+        end = col
+    ranges.append([start, end])
+    return ranges
+
+
+def format_hex_bytes(values: list[int]) -> str:
+    return " ".join(f"{value:02x}" for value in values)
+
+
+def capture_top_page_row_debug(playtester: Playtester, rows: list[int]) -> dict:
+    required_symbols = {"SCREEN_RAM", "SCREEN_RAM_ALT"}
+    missing = sorted(required_symbols - playtester.symbols.keys())
+    if missing:
+        return {
+            "enabled": False,
+            "missing_symbols": missing,
+        }
+
+    screen_page0 = playtester.symbols["SCREEN_RAM"]
+    screen_page1 = playtester.symbols["SCREEN_RAM_ALT"]
+    row_diffs = []
+    total_diff_cells = 0
+    rows_with_diff = []
+
+    for row in rows:
+        page0_addr = screen_page0 + (row * 40)
+        page1_addr = screen_page1 + (row * 40)
+        page0_values = list(playtester.monitor.mem_get(page0_addr, 40))
+        page1_values = list(playtester.monitor.mem_get(page1_addr, 40))
+        diff_cols = [col for col, (left, right) in enumerate(zip(page0_values, page1_values)) if left != right]
+        row_diff = {
+            "row": row,
+            "page0_addr": page0_addr,
+            "page1_addr": page1_addr,
+            "page0_values": page0_values,
+            "page1_values": page1_values,
+            "page0_hex": format_hex_bytes(page0_values),
+            "page1_hex": format_hex_bytes(page1_values),
+            "diff_cols": diff_cols,
+            "diff_ranges": diff_ranges(diff_cols),
+            "diff_count": len(diff_cols),
+        }
+        row_diffs.append(row_diff)
+        total_diff_cells += len(diff_cols)
+        if diff_cols:
+            rows_with_diff.append(row)
+
+    return {
+        "enabled": True,
+        "rows": rows,
+        "row_diffs": row_diffs,
+        "rows_with_diff": rows_with_diff,
+        "any_diff": total_diff_cells > 0,
+        "total_diff_cells": total_diff_cells,
+        "active_screen_is_alt": read_symbol_u8(playtester, "active_screen_is_alt"),
+        "screen_flip_pending": read_symbol_u8(playtester, "screen_flip_pending"),
+        "formation_render_page_is_alt": read_symbol_u8(playtester, "formation_render_page_is_alt"),
+        "memory_setup": read_symbol_u8(playtester, "MEMORY_SETUP"),
+    }
+
+
 def capture_latched_review_sample(
     playtester: Playtester,
     remote_monitor: RemoteTextMonitor,
@@ -230,6 +341,7 @@ def capture_latched_review_sample(
     start_time: float,
     frames_dir: Path,
     screenshot_format: int,
+    top_page_rows: Optional[list[int]],
     capture_latched: bool,
     previous_sample: Optional[dict],
 ) -> dict:
@@ -265,6 +377,10 @@ def capture_latched_review_sample(
             "formation_render_scroll_phase": read_symbol_u8(playtester, "formation_render_scroll_phase"),
             "formation_render_dirty": read_symbol_u8(playtester, "formation_render_dirty"),
             "formation_full_redraw_pending": read_symbol_u8(playtester, "formation_full_redraw_pending"),
+            "active_screen_is_alt": read_symbol_u8(playtester, "active_screen_is_alt"),
+            "screen_flip_pending": read_symbol_u8(playtester, "screen_flip_pending"),
+            "formation_render_page_is_alt": read_symbol_u8(playtester, "formation_render_page_is_alt"),
+            "memory_setup": read_symbol_u8(playtester, "MEMORY_SETUP"),
             "leftmost_x": playtester.leftmost_formation_x(sample),
             "rightmost_x": rightmost_formation_x(playtester, sample),
             "elapsed_seconds": round(time.time() - start_time, 4),
@@ -272,6 +388,8 @@ def capture_latched_review_sample(
             "frame_advance": frame_advance,
         }
     )
+    if top_page_rows:
+        sample["top_page_row_debug"] = capture_top_page_row_debug(playtester, top_page_rows)
     return sample
 
 
@@ -284,6 +402,7 @@ def capture_review_sample(
     start_time: float,
     frames_dir: Path,
     screenshot_format: int,
+    top_page_rows: Optional[list[int]],
     previous_sample: Optional[dict],
 ) -> dict:
     capture_latched = False
@@ -305,6 +424,7 @@ def capture_review_sample(
             start_time,
             frames_dir,
             screenshot_format,
+            top_page_rows,
             capture_latched=capture_latched,
             previous_sample=previous_sample,
         )
@@ -358,6 +478,11 @@ def main() -> int:
         playtester.launch_vice()
         remote_monitor.connect()
         stage_sample = wait_for_stage(playtester, args.stage)
+        top_page_rows = None
+        if args.log_top_page_rows:
+            top_page_rows = parse_top_page_rows(args.top_page_rows)
+            if top_page_rows is None:
+                top_page_rows = default_top_page_rows(playtester)
         clear_strategy_value = apply_clear_strategy(playtester, args.clear_strategy)
         force_zero_scroll_value = apply_force_zero_scroll(playtester, args.force_zero_scroll)
         logger.log(
@@ -365,6 +490,8 @@ def main() -> int:
         )
         if force_zero_scroll_value:
             logger.log("Enabled formation_force_zero_scroll_debug")
+        if top_page_rows:
+            logger.log(f"Logging page0/page1 screen bytes for rows: {top_page_rows}")
 
         if args.stage == "ready":
             hold_ready_state(playtester)
@@ -397,6 +524,7 @@ def main() -> int:
                         start_time,
                         frames_dir,
                         args.screenshot_format,
+                        top_page_rows,
                         capture_latched=True,
                         previous_sample=previous_sample,
                     )
@@ -423,6 +551,7 @@ def main() -> int:
                 start_time,
                 frames_dir,
                 args.screenshot_format,
+                top_page_rows,
                 previous_sample=None,
             )
             records["samples"].append(previous_sample)
@@ -446,6 +575,7 @@ def main() -> int:
                     start_time,
                     frames_dir,
                     args.screenshot_format,
+                    top_page_rows,
                     previous_sample=previous_sample,
                 )
                 records["samples"].append(previous_sample)
@@ -494,6 +624,17 @@ def main() -> int:
         if first_frame_counter is None or last_frame_counter is None
         else ((last_frame_counter - first_frame_counter) & 0xFF),
     }
+    if args.log_top_page_rows:
+        samples_with_top_page_row_diff = [
+            sample["index"]
+            for sample in records["samples"]
+            if sample.get("top_page_row_debug", {}).get("any_diff")
+        ]
+        summary["top_page_rows"] = (
+            records["samples"][0].get("top_page_row_debug", {}).get("rows") if records["samples"] else None
+        )
+        summary["samples_with_top_page_row_diff"] = samples_with_top_page_row_diff
+        summary["top_page_row_diff_sample_count"] = len(samples_with_top_page_row_diff)
 
     records["artifacts"]["exit_screenshot_exists"] = args.exit_screenshot.exists()
     args.json.write_text(json.dumps(records, indent=2), encoding="utf-8")
