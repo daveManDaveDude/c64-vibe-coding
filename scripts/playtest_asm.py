@@ -41,6 +41,7 @@ SPRITE6_Y = 0xD00D
 SPRITE7_X = 0xD00E
 SPRITE7_Y = 0xD00F
 SPRITE_X_MSB = 0xD010
+RASTER = 0xD012
 SPRITE_ENABLE = 0xD015
 JOYSTICK_PORT_2 = 0xDC00
 
@@ -710,6 +711,12 @@ class Playtester:
         formation_shift_phase = None
         if "formation_shift_phase" in self.symbols:
             formation_shift_phase = self.monitor.mem_get(self.symbols["formation_shift_phase"], 1)[0]
+        raster_phase = None
+        if "raster_phase" in self.symbols:
+            raster_phase = self.monitor.mem_get(self.symbols["raster_phase"], 1)[0]
+        frame_capture_counter = None
+        if "frame_capture_counter" in self.symbols:
+            frame_capture_counter = self.monitor.mem_get(self.symbols["frame_capture_counter"], 1)[0]
         enemy_attack_active = None
         if "enemy_attack_active" in self.symbols:
             enemy_attack_active = self.monitor.mem_get(self.symbols["enemy_attack_active"], 1)[0] != 0
@@ -774,6 +781,9 @@ class Playtester:
             "formation_logical_alive_count": formation_logical_alive_count,
             "formation_char_render_mask": formation_char_render_mask,
             "formation_shift_phase": formation_shift_phase,
+            "raster_phase": raster_phase,
+            "raster_line": vic(RASTER),
+            "frame_capture_counter": frame_capture_counter,
             "enemy_attack_active": enemy_attack_active,
             "frame_capture_ready": frame_capture_ready,
             "score_total": (
@@ -935,7 +945,8 @@ class Playtester:
         addresses = []
         visual_blank = []
         band_width = self.symbols.get("FORMATION_CHAR_BAND_WIDTH", 40)
-        for offset in range(4):
+        slot_stride = self.symbols.get("FORMATION_CHAR_SLOT_STRIDE", 4)
+        for offset in range(slot_stride):
             probe_col = col + offset
             if probe_col >= band_width:
                 addresses.append(None)
@@ -1112,19 +1123,21 @@ class Playtester:
     def required_gap_blank_cells(self, sample, slot_index: int) -> list[bool]:
         slot_row = self.formation_char_row(slot_index)
         slot_x = sample[f"formation_{slot_index}_x"]
-        required_blank = [True, True, True, True]
+        slot_stride = self.symbols.get("FORMATION_CHAR_SLOT_STRIDE", 4)
+        slot_width_pixels = slot_stride * 8
+        required_blank = [True] * slot_stride
         for slot in self.live_formation_slots(sample):
             if slot["index"] == slot_index:
                 continue
             if self.formation_char_row(slot["index"]) != slot_row:
                 continue
             delta_x = slot["x"] - slot_x
-            if 0 < delta_x < 32:
-                overlap_cells = max(1, ((32 - delta_x) + 7) // 8)
-                for offset in range(4 - overlap_cells, 4):
+            if 0 < delta_x < slot_width_pixels:
+                overlap_cells = max(1, ((slot_width_pixels - delta_x) + 7) // 8)
+                for offset in range(slot_stride - overlap_cells, slot_stride):
                     required_blank[offset] = False
-            elif -32 < delta_x < 0:
-                overlap_cells = max(1, ((32 + delta_x) + 7) // 8)
+            elif -slot_width_pixels < delta_x < 0:
+                overlap_cells = max(1, ((slot_width_pixels + delta_x) + 7) // 8)
                 for offset in range(overlap_cells):
                     required_blank[offset] = False
         return required_blank

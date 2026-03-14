@@ -13,7 +13,10 @@ SHIFT_PHASES = 8
 
 # The formation uses the first two frames for each enemy type.
 FORMATION_FRAME_SPRITE_INDICES = (0, 1, 3, 4, 6, 7)
-GRUNT_FRAME_SPRITE_INDICES = {6, 7}
+# The second animation frame for each formation type carries the same tiny
+# detached bottom-row pixel pair in the sprite art. It reads as corruption in
+# the shared char renderer, so trim that row in the generated char pack only.
+TRIM_BOTTOM_ROW_SPRITE_INDICES = {1, 4, 7}
 SPRITE_TO_CHAR_PAIR = {
     "00": "00",
     "01": "01",
@@ -84,10 +87,10 @@ def build_frame_pages(sprites: list[bytes]) -> bytes:
             start = row * SPRITE_ROW_BYTES
             base_rows.append(sprite_row_to_multicolor_char_bytes(sprite[start : start + SPRITE_ROW_BYTES]))
 
-        if sprite_index in GRUNT_FRAME_SPRITE_INDICES:
-            # The grunt source frames end with a tiny dangling tail pixel pair.
-            # In the char pack this reads as a detached corruption blob during scroll,
-            # so keep the hardware sprite art unchanged and trim it only here.
+        if sprite_index in TRIM_BOTTOM_ROW_SPRITE_INDICES:
+            # The source art keeps a tiny dangling tail pair on animation frame 1.
+            # In the shared char cache that row reads like a detached corruption blob,
+            # so keep the sprite art unchanged and trim it only for the char pack.
             base_rows[-1] = [0] * CHAR_BYTES_PER_ROW
 
         for shift in range(SHIFT_PHASES):
