@@ -3055,7 +3055,7 @@ render_formation_char_slot_clear:
   rts
 render_formation_char_slot_check_alive:
   lda formation_slot0_alive, x
-  beq render_formation_char_slot_disable
+  beq render_formation_char_slot_clear
   jmp draw_formation_char_slot
 render_formation_char_slot_disable:
   rts
@@ -4352,7 +4352,7 @@ clear_dive_slot_char_handoff:
   ldx dive_slot
   cpx #FORMATION_SLOT_COUNT
   bcs clear_dive_slot_char_handoff_done
-  jsr clear_formation_char_slot_saved
+  jsr clear_dive_slot_char_cells_both_pages
   lda formation_char_render_mask
   and formation_char_clear_bit_table, x
   sta formation_char_render_mask
@@ -4372,6 +4372,39 @@ clear_dive_slot_char_handoff:
   and formation_char_clear_bit_hi2_table, x
   sta formation_char_render_mask_pending_hi2
 clear_dive_slot_char_handoff_done:
+  rts
+
+clear_dive_slot_char_cells_both_pages:
+  jsr load_formation_slot_position
+  sta formation_char_slot_x_lo
+  sty formation_char_slot_x_hi
+
+  lda formation_render_page_is_alt
+  pha
+
+  jsr load_formation_render_page0
+  lda formation_render_scroll_phase_page0
+  sta formation_render_work_scroll_phase
+  ldx dive_slot
+  ldy formation_char_row_table, x
+  jsr clear_formation_char_slot_screen
+
+  jsr load_formation_render_page1
+  lda formation_render_scroll_phase_page1
+  sta formation_render_work_scroll_phase
+  ldx dive_slot
+  ldy formation_char_row_table, x
+  jsr clear_formation_char_slot_screen
+
+  pla
+  beq clear_dive_slot_char_cells_both_pages_restore_page0
+  jsr load_formation_render_page1
+  ldx dive_slot
+  rts
+
+clear_dive_slot_char_cells_both_pages_restore_page0:
+  jsr load_formation_render_page0
+  ldx dive_slot
   rts
 
 draw_player_extra_layers_char:
