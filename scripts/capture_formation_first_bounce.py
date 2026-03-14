@@ -212,7 +212,7 @@ def parse_args():
     parser.add_argument("--exit-screenshot", type=Path, default=Path("artifacts/formation-first-bounce-exit.png"))
     parser.add_argument("--window-x", type=int, default=80)
     parser.add_argument("--window-y", type=int, default=80)
-    parser.add_argument("--window-width", type=int, default=720)
+    parser.add_argument("--window-width", type=int, default=768)
     parser.add_argument("--window-height", type=int, default=638)
     parser.add_argument("--process-name", default="x64sc")
     parser.add_argument("--frames-after-bounce", type=int, default=5)

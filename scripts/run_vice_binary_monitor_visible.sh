@@ -18,6 +18,10 @@ exec x64sc \
   -VICIIaspectmode 0 \
   -VICIIdscan \
   -VICIIvsync \
+  -windowxpos 80 \
+  -windowypos 80 \
+  -windowwidth 768 \
+  -windowheight 638 \
   -autostart-warp \
   -binarymonitor \
   -binarymonitoraddress "$ADDRESS" \

@@ -17,6 +17,14 @@ FORMATION_FRAME_SPRITE_INDICES = (0, 1, 3, 4, 6, 7)
 # detached bottom-row pixel pair in the sprite art. It reads as corruption in
 # the shared char renderer, so trim that row in the generated char pack only.
 TRIM_BOTTOM_ROW_SPRITE_INDICES = {1, 4, 7}
+# The upper-row animation frame also carries wider outer wing pixels than the
+# base frame. In the shared char renderer that reads as a stray edge glitch on
+# the formation ends, so reuse the stable base silhouette for those cached
+# variants until we have dedicated char-safe animation art.
+REUSE_BASE_SPRITE_INDICES = {
+    1: 0,
+    4: 3,
+}
 SPRITE_TO_CHAR_PAIR = {
     "00": "00",
     "01": "01",
@@ -75,7 +83,7 @@ def build_frame_pages(sprites: list[bytes]) -> bytes:
     output = bytearray()
 
     for sprite_index in FORMATION_FRAME_SPRITE_INDICES:
-        sprite = sprites[sprite_index]
+        sprite = sprites[REUSE_BASE_SPRITE_INDICES.get(sprite_index, sprite_index)]
         top_row = first_active_row(sprite)
         if top_row + CHAR_ROWS > SPRITE_VISIBLE_ROWS:
             raise ValueError(

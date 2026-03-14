@@ -17,6 +17,10 @@ exec x64sc \
   -VICIIaspectmode 0 \
   -VICIIdscan \
   -VICIIvsync \
+  -windowxpos 80 \
+  -windowypos 80 \
+  -windowwidth 768 \
+  -windowheight 638 \
   -binarymonitor \
   -binarymonitoraddress ip4://127.0.0.1:6502 \
   -autostartprgmode 1 \
