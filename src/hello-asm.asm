@@ -796,6 +796,7 @@ init_formation_renderer:
   sta SPRITE_MULTICOLOR_1
   sta BACKGROUND_MULTICOLOR_2
   jsr clear_formation_char_band
+  jsr init_formation_char_band_colors
   jsr clear_formation_char_glyphs
   lda #$00
   sta formation_char_render_mask_pending
@@ -3091,8 +3092,6 @@ draw_formation_char_slot:
   jsr load_formation_slot_position
   sta formation_char_slot_x_lo
   sty formation_char_slot_x_hi
-  lda formation_char_color_table, x
-  sta formation_char_color
   ldy formation_char_row_table, x
   jsr draw_formation_char_slot_common
   lda formation_char_render_mask_pending
@@ -3129,10 +3128,6 @@ draw_formation_char_slot_common:
   sta SCREEN_PTR
   lda screen_row_hi, y
   sta SCREEN_PTR + 1
-  lda color_row_lo, y
-  sta COLOR_PTR
-  lda color_row_hi, y
-  sta COLOR_PTR + 1
 
   txa
   pha
@@ -3145,9 +3140,6 @@ draw_formation_char_slot_common_loop:
   clc
   adc formation_char_glyph_base
   sta (SCREEN_PTR), y
-  lda formation_char_color
-  ora #FORMATION_CHAR_MULTICOLOR_FLAG
-  sta (COLOR_PTR), y
   iny
   inx
   cpx #FORMATION_CHAR_SLOT_STRIDE
@@ -3218,10 +3210,6 @@ clear_formation_char_slot_screen:
   sta SCREEN_PTR
   lda screen_row_hi, y
   sta SCREEN_PTR + 1
-  lda color_row_lo, y
-  sta COLOR_PTR
-  lda color_row_hi, y
-  sta COLOR_PTR + 1
 
   txa
   pha
@@ -3232,8 +3220,6 @@ clear_formation_char_slot_screen_loop:
   bcs clear_formation_char_slot_screen_done
   lda #$20
   sta (SCREEN_PTR), y
-  lda #PLAYFIELD_TEXT_COLOR
-  sta (COLOR_PTR), y
   iny
   inx
   cpx formation_char_clear_count
@@ -3255,10 +3241,6 @@ clear_formation_char_slot_saved:
   sta SCREEN_PTR
   lda screen_row_hi, y
   sta SCREEN_PTR + 1
-  lda color_row_lo, y
-  sta COLOR_PTR
-  lda color_row_hi, y
-  sta COLOR_PTR + 1
 
   lda formation_char_last_col, x
   tay
@@ -3270,8 +3252,6 @@ clear_formation_char_slot_saved_loop:
   bcs clear_formation_char_slot_saved_done
   lda #$20
   sta (SCREEN_PTR), y
-  lda #PLAYFIELD_TEXT_COLOR
-  sta (COLOR_PTR), y
   iny
   inx
   cpx formation_char_clear_count
@@ -3424,17 +3404,11 @@ clear_formation_char_band_loop:
   sta SCREEN_PTR
   lda screen_row_hi, y
   sta SCREEN_PTR + 1
-  lda color_row_lo, y
-  sta COLOR_PTR
-  lda color_row_hi, y
-  sta COLOR_PTR + 1
 
   ldy #FORMATION_CHAR_BAND_ORIGIN_COL
 clear_formation_char_band_row_loop:
   lda #$20
   sta (SCREEN_PTR), y
-  lda #PLAYFIELD_TEXT_COLOR
-  sta (COLOR_PTR), y
   iny
   cpy #(FORMATION_CHAR_BAND_ORIGIN_COL + FORMATION_CHAR_BAND_WIDTH)
   bcc clear_formation_char_band_row_loop
@@ -3442,6 +3416,32 @@ clear_formation_char_band_row_loop:
   inx
   cpx #FORMATION_CHAR_BAND_HEIGHT
   bcc clear_formation_char_band_loop
+  rts
+
+init_formation_char_band_colors:
+  ldx #$00
+init_formation_char_band_colors_loop:
+  lda formation_char_band_rows, x
+  tay
+  lda color_row_lo, y
+  sta COLOR_PTR
+  lda color_row_hi, y
+  sta COLOR_PTR + 1
+  lda formation_char_band_color_table, x
+  ora #FORMATION_CHAR_MULTICOLOR_FLAG
+  sta formation_char_color
+
+  ldy #FORMATION_CHAR_BAND_ORIGIN_COL
+init_formation_char_band_colors_row_loop:
+  lda formation_char_color
+  sta (COLOR_PTR), y
+  iny
+  cpy #(FORMATION_CHAR_BAND_ORIGIN_COL + FORMATION_CHAR_BAND_WIDTH)
+  bcc init_formation_char_band_colors_row_loop
+
+  inx
+  cpx #FORMATION_CHAR_BAND_HEIGHT
+  bcc init_formation_char_band_colors_loop
   rts
 
 clear_formation_char_exposed_columns_global:
@@ -3558,17 +3558,11 @@ clear_formation_char_slot_exposed_columns_row:
   sta SCREEN_PTR
   lda screen_row_hi, y
   sta SCREEN_PTR + 1
-  lda color_row_lo, y
-  sta COLOR_PTR
-  lda color_row_hi, y
-  sta COLOR_PTR + 1
 
   ldy formation_clear_start_col
 clear_formation_char_slot_exposed_columns_row_loop:
   lda #$20
   sta (SCREEN_PTR), y
-  lda #PLAYFIELD_TEXT_COLOR
-  sta (COLOR_PTR), y
   iny
   cpy formation_clear_end_col
   bcc clear_formation_char_slot_exposed_columns_row_loop
@@ -3716,17 +3710,11 @@ clear_formation_char_exposed_columns_row:
   sta SCREEN_PTR
   lda screen_row_hi, y
   sta SCREEN_PTR + 1
-  lda color_row_lo, y
-  sta COLOR_PTR
-  lda color_row_hi, y
-  sta COLOR_PTR + 1
 
   ldy formation_clear_start_col
 clear_formation_char_exposed_columns_row_loop:
   lda #$20
   sta (SCREEN_PTR), y
-  lda #PLAYFIELD_TEXT_COLOR
-  sta (COLOR_PTR), y
   iny
   cpy formation_clear_end_col
   bcc clear_formation_char_exposed_columns_row_loop
@@ -4158,6 +4146,13 @@ formation_char_band_rows:
   .byte FORMATION_ROW3_CHAR_ROW,FORMATION_ROW3_CHAR_ROW + 1
   .byte FORMATION_ROW4_CHAR_ROW,FORMATION_ROW4_CHAR_ROW + 1
   .byte FORMATION_ROW5_CHAR_ROW
+formation_char_band_color_table:
+  .byte FLAGSHIP_COLOR,FLAGSHIP_COLOR
+  .byte FLAGSHIP_COLOR,FLAGSHIP_COLOR
+  .byte ESCORT_COLOR,ESCORT_COLOR
+  .byte GRUNT_COLOR,GRUNT_COLOR
+  .byte GRUNT_COLOR,GRUNT_COLOR
+  .byte GRUNT_COLOR
 formation_clear_slot_scan_start_table:
   .byte $00,$00,$02,$02,$07,$07,$0e,$0e,$17,$17,$20
 formation_clear_slot_scan_end_table:
@@ -4251,13 +4246,6 @@ formation_slot_shared_type_table:
   .byte 2,2,2,2,2,2,2,2,2
   .byte 2,2,2,2,2,2,2,2,2
   .byte 2,2,2,2,2,2,2,2,2
-formation_char_color_table:
-  .byte FLAGSHIP_COLOR,FLAGSHIP_COLOR
-  .byte FLAGSHIP_COLOR,FLAGSHIP_COLOR,FLAGSHIP_COLOR,FLAGSHIP_COLOR,FLAGSHIP_COLOR
-  .byte ESCORT_COLOR,ESCORT_COLOR,ESCORT_COLOR,ESCORT_COLOR,ESCORT_COLOR,ESCORT_COLOR,ESCORT_COLOR
-  .byte GRUNT_COLOR,GRUNT_COLOR,GRUNT_COLOR,GRUNT_COLOR,GRUNT_COLOR,GRUNT_COLOR,GRUNT_COLOR,GRUNT_COLOR,GRUNT_COLOR
-  .byte GRUNT_COLOR,GRUNT_COLOR,GRUNT_COLOR,GRUNT_COLOR,GRUNT_COLOR,GRUNT_COLOR,GRUNT_COLOR,GRUNT_COLOR,GRUNT_COLOR
-  .byte GRUNT_COLOR,GRUNT_COLOR,GRUNT_COLOR,GRUNT_COLOR,GRUNT_COLOR,GRUNT_COLOR,GRUNT_COLOR,GRUNT_COLOR,GRUNT_COLOR
 formation_slot_char_frame_base_table:
   .byte $00,$00
   .byte $00,$00,$00,$00,$00

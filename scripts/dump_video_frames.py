@@ -20,10 +20,9 @@ def reset_output_dir(path: Path) -> None:
     path.mkdir(parents=True, exist_ok=True)
 
 
-def main() -> int:
-    args = parse_args()
-    source = args.source.resolve()
-    output_dir = args.output_dir.resolve()
+def dump_video_frames(source: Path, output_dir: Path) -> dict:
+    source = source.resolve()
+    output_dir = output_dir.resolve()
     frames_dir = output_dir / "frames"
 
     reset_output_dir(output_dir)
@@ -50,7 +49,16 @@ def main() -> int:
         "duration": metadata.get("duration"),
         "size": metadata.get("size"),
     }
-    (output_dir / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    return summary
+
+
+def main() -> int:
+    args = parse_args()
+    summary = dump_video_frames(args.source, args.output_dir)
+    Path(args.output_dir).resolve().joinpath("summary.json").write_text(
+        json.dumps(summary, indent=2),
+        encoding="utf-8",
+    )
     return 0
 
 

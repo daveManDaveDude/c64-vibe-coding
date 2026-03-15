@@ -121,6 +121,7 @@ make clean
 - `make verify-asm`: assembly console verification for sandbox/headless use
 - `make playtest-asm`: faster binary-monitor autoplay smoke test without per-sample host screenshots
 - `make playtest-asm-visible`: binary-monitor autoplay smoke test with visible VICE window and per-sample host screenshots
+- `make capture-gameplay-frames`: build the assembly target, record `5` seconds of the visible VICE window, and dump every captured frame to `artifacts/gameplay-capture/frame-dump/frames/`
 - `make preview-sprites`: regenerate the enemy subset, full arcade sprite bank, player sprite layers, and player explosion bank, then render SVG previews to `artifacts/enemy-sprites-preview.svg`, `artifacts/arcade-sprites-preview.svg`, `artifacts/player-sprite-preview.svg`, and `artifacts/player-explosion-preview.svg`
 - `make debug-sprites`: print the generated enemy frames as ASCII and also regenerate the sprite previews
 - `make convert-sprites-png2prg`: normalize the first 3x3 enemy block from the full arcade sheet for `png2prg`, run the conversion row-by-row, and write `src/generated_enemy_sprites_png2prg.bin`
@@ -235,6 +236,14 @@ Visible assembly autoplay smoke test:
 - `artifacts/playtest-asm-visible-frames/`
 - `artifacts/playtest-asm-visible-exit.png`
 
+Gameplay frame capture:
+- `artifacts/gameplay-capture/gameplay.mp4`
+- `artifacts/gameplay-capture/summary.json`
+- `artifacts/gameplay-capture/ffmpeg.log`
+- `artifacts/gameplay-capture/vice.log`
+- `artifacts/gameplay-capture/frame-dump/summary.json`
+- `artifacts/gameplay-capture/frame-dump/frames/`
+
 ## Notes
 
 - BASIC keywords should stay lowercase in ASCII source for reliable tokenization.
@@ -242,6 +251,7 @@ Visible assembly autoplay smoke test:
 - `c1541` may print `OPENCBM` dynamic library warnings on macOS Homebrew installs; `.d64` creation still works for this workflow.
 - In Codex or other sandboxed environments, VICE GUI targets may require running outside the sandbox to access macOS display services. Use `make verify-asm` for non-GUI verification, and use `make run-asm` / `make run-asm-timed` from a normal host session for interactive/manual testing.
 - `make playtest-asm` and `make playtest-asm-visible` are macOS GUI playtests. They need the shell host app to have Accessibility permission for `System Events` keyboard control. Screen Recording is only needed for the optional per-sample host screenshots.
+- `make capture-gameplay-frames` also needs macOS Screen Recording permission, because it records the visible VICE window through AVFoundation before dumping the captured video into per-frame PNGs.
 - The playtest still uses the VICE binary monitor on `127.0.0.1:6502` for generic hardware reads. In a sandboxed Codex session that localhost socket may require escalated permissions; on a normal local macOS shell it runs directly.
 
 ## Debugging in VS Code (BASIC step-through)
