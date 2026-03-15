@@ -104,7 +104,7 @@ BasicUpstart2(start)
 .label FORMATION_CHAR_MAX_X = $0124 - FORMATION_EDGE_DEBUG_INSET
 .label FORMATION_CHAR_MAX_X_LO = <FORMATION_CHAR_MAX_X
 .label FORMATION_CHAR_MAX_X_HI = >FORMATION_CHAR_MAX_X
-.label FORMATION_RIGHT_BOUNCE_ALLOWANCE = 18
+.label FORMATION_RIGHT_BOUNCE_ALLOWANCE = 28
 .label FORMATION_TOP_SLOT_COUNT = 7
 .label FORMATION_MID_SLOT_COUNT = 7
 .label FORMATION_BOTTOM_SLOT_COUNT = 27
@@ -1421,12 +1421,39 @@ formation_clamp_char_max:
   sta formation_x_hi
   lda #$ff
   sta formation_dir
+  lda #$01
+  sta formation_move_timer
 
 formation_store_x:
   jsr update_formation_slot_positions
+  lda formation_dir
+  bmi formation_store_x_check_render
+  lda formation_bound_max_lo
+  sec
+  sbc formation_x_lo
+  tay
+  lda formation_bound_max_hi
+  sbc formation_x_hi
+  bne formation_store_x_check_render
+  cpy #$01
+  bne formation_store_x_check_render
+  lda #$01
+  sta formation_move_timer
+formation_store_x_check_render:
   lda formation_anchor_col
   cmp formation_render_anchor_col
   bne formation_store_x_mark_dirty
+  ldy active_screen_is_alt
+  beq formation_store_x_check_visible_page0
+  cmp formation_render_anchor_col_page1
+  beq formation_done
+  jmp formation_store_x_flip_visible
+formation_store_x_check_visible_page0:
+  cmp formation_render_anchor_col_page0
+  beq formation_done
+formation_store_x_flip_visible:
+  lda #$01
+  sta screen_flip_pending
   jmp formation_done
 formation_store_x_mark_dirty:
   lda #$01
