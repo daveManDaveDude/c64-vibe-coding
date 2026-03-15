@@ -73,9 +73,11 @@ BasicUpstart2(start)
 .label PRESS_FIRE_MESSAGE_COL = 15
 .label FORMATION_MULTI0_COLOR = $06
 .label FORMATION_MULTI1_COLOR = $02
+.label DREADNOUGHT_COLOR = $03
 .label FLAGSHIP_COLOR = $07
 .label ESCORT_COLOR = $04
 .label GRUNT_COLOR = $03
+.label DREADNOUGHT_DIVE_COLOR = $03
 .label FLAGSHIP_DIVE_COLOR = $08
 .label ESCORT_DIVE_COLOR = $06
 .label GRUNT_DIVE_COLOR = $0b
@@ -158,6 +160,8 @@ BasicUpstart2(start)
 .label GRUNT_SPRITE0_PTR = ARCADE_SPRITE_PTR_BASE + 6
 .label GRUNT_SPRITE1_PTR = ARCADE_SPRITE_PTR_BASE + 7
 .label GRUNT_SPRITE2_PTR = ARCADE_SPRITE_PTR_BASE + 8
+.label DREADNOUGHT_SPRITE0_PTR = ARCADE_SPRITE_PTR_BASE + 36
+.label DREADNOUGHT_SPRITE1_PTR = ARCADE_SPRITE_PTR_BASE + 37
 .label FORMATION_SLOT0_MASK = %00000001
 .label FORMATION_SLOT1_MASK = %00001000
 .label FORMATION_SLOT2_MASK = %00010000
@@ -215,6 +219,9 @@ BasicUpstart2(start)
 .label SHOT_HIT_RIGHT_OFFSET = 12
 .label SHOT_HIT_BOTTOM_OFFSET = 13
 .label FIRE_MASK = %00010000
+.label SCORE_DREADNOUGHT_LO = $50
+.label SCORE_DREADNOUGHT_MID = $01
+.label SCORE_DREADNOUGHT_HI = $00
 .label SCORE_FLAGSHIP_LO = $80
 .label SCORE_FLAGSHIP_MID = $00
 .label SCORE_FLAGSHIP_HI = $00
@@ -1887,6 +1894,8 @@ select_dive_animation_frame:
   ldx dive_anim_frame
   ldy dive_slot
   lda formation_slot_shared_type_table, y
+  cmp #$03
+  beq select_dreadnought_dive_animation
   cmp #$01
   beq select_escort_dive_animation
   cmp #$02
@@ -1895,6 +1904,13 @@ select_dive_animation_frame:
   lda grunt_dive_animation_sequence, x
   sta dive_sprite_pointer
   lda grunt_dive_animation_colors, x
+  sta dive_sprite_color
+  rts
+
+select_dreadnought_dive_animation:
+  lda dreadnought_dive_animation_sequence, x
+  sta dive_sprite_pointer
+  lda dreadnought_dive_animation_colors, x
   sta dive_sprite_color
   rts
 
@@ -3307,7 +3323,8 @@ update_formation_shared_glyph_cache_if_needed_begin:
   clc
   adc #$02
   sta formation_shared_type_frame_value_table + 2
-  lda formation_anim_frame_offset_table, y
+  clc
+  adc #$02
   sta formation_shared_type_frame_value_table + 3
 
   ldx #$00
@@ -4119,12 +4136,18 @@ game_over_message:
 press_fire_message:
   .byte 16,18,5,19,19,32,6,9,18,5,0
 
+dreadnought_animation_sequence:
+  .byte DREADNOUGHT_SPRITE0_PTR,DREADNOUGHT_SPRITE0_PTR,DREADNOUGHT_SPRITE0_PTR,DREADNOUGHT_SPRITE0_PTR
 flagship_animation_sequence:
   .byte FLAGSHIP_SPRITE0_PTR,FLAGSHIP_SPRITE1_PTR,FLAGSHIP_SPRITE0_PTR,FLAGSHIP_SPRITE1_PTR
 escort_animation_sequence:
   .byte ESCORT_SPRITE0_PTR,ESCORT_SPRITE1_PTR,ESCORT_SPRITE0_PTR,ESCORT_SPRITE1_PTR
 grunt_animation_sequence:
   .byte GRUNT_SPRITE0_PTR,GRUNT_SPRITE1_PTR,GRUNT_SPRITE0_PTR,GRUNT_SPRITE1_PTR
+dreadnought_dive_animation_sequence:
+  .byte DREADNOUGHT_SPRITE0_PTR,ARCADE_SPRITE_PTR_BASE + 37,ARCADE_SPRITE_PTR_BASE + 38,ARCADE_SPRITE_PTR_BASE + 39,ARCADE_SPRITE_PTR_BASE + 40,ARCADE_SPRITE_PTR_BASE + 41,ARCADE_SPRITE_PTR_BASE + 42,ARCADE_SPRITE_PTR_BASE + 41,ARCADE_SPRITE_PTR_BASE + 40,ARCADE_SPRITE_PTR_BASE + 39
+dreadnought_dive_animation_colors:
+  .byte DREADNOUGHT_COLOR,DREADNOUGHT_DIVE_COLOR,DREADNOUGHT_DIVE_COLOR,DREADNOUGHT_DIVE_COLOR,DREADNOUGHT_DIVE_COLOR,DREADNOUGHT_DIVE_COLOR,DREADNOUGHT_DIVE_COLOR,DREADNOUGHT_DIVE_COLOR,DREADNOUGHT_DIVE_COLOR,DREADNOUGHT_DIVE_COLOR
 flagship_dive_animation_sequence:
   .byte FLAGSHIP_SPRITE0_PTR,ARCADE_SPRITE_PTR_BASE + 9,ARCADE_SPRITE_PTR_BASE + 10,ARCADE_SPRITE_PTR_BASE + 11,ARCADE_SPRITE_PTR_BASE + 12,ARCADE_SPRITE_PTR_BASE + 13,ARCADE_SPRITE_PTR_BASE + 14,ARCADE_SPRITE_PTR_BASE + 15,ARCADE_SPRITE_PTR_BASE + 16,ARCADE_SPRITE_PTR_BASE + 17
 flagship_dive_animation_colors:
@@ -4147,7 +4170,7 @@ formation_char_band_rows:
   .byte FORMATION_ROW4_CHAR_ROW,FORMATION_ROW4_CHAR_ROW + 1
   .byte FORMATION_ROW5_CHAR_ROW
 formation_char_band_color_table:
-  .byte FLAGSHIP_COLOR,FLAGSHIP_COLOR
+  .byte DREADNOUGHT_COLOR,DREADNOUGHT_COLOR
   .byte FLAGSHIP_COLOR,FLAGSHIP_COLOR
   .byte ESCORT_COLOR,ESCORT_COLOR
   .byte GRUNT_COLOR,GRUNT_COLOR
@@ -4247,7 +4270,7 @@ formation_slot_shared_type_table:
   .byte 2,2,2,2,2,2,2,2,2
   .byte 2,2,2,2,2,2,2,2,2
 formation_slot_char_frame_base_table:
-  .byte $00,$00
+  .byte $06,$06
   .byte $00,$00,$00,$00,$00
   .byte $02,$02,$02,$02,$02,$02,$02
   .byte $04,$04,$04,$04,$04,$04,$04,$04,$04
@@ -4256,21 +4279,21 @@ formation_slot_char_frame_base_table:
 formation_anim_frame_offset_table:
   .byte $00,$01,$00,$01
 formation_slot_score_lo_table:
-  .byte SCORE_FLAGSHIP_LO,SCORE_FLAGSHIP_LO
+  .byte SCORE_DREADNOUGHT_LO,SCORE_DREADNOUGHT_LO
   .byte SCORE_FLAGSHIP_LO,SCORE_FLAGSHIP_LO,SCORE_FLAGSHIP_LO,SCORE_FLAGSHIP_LO,SCORE_FLAGSHIP_LO
   .byte SCORE_ESCORT_LO,SCORE_ESCORT_LO,SCORE_ESCORT_LO,SCORE_ESCORT_LO,SCORE_ESCORT_LO,SCORE_ESCORT_LO,SCORE_ESCORT_LO
   .byte SCORE_GRUNT_LO,SCORE_GRUNT_LO,SCORE_GRUNT_LO,SCORE_GRUNT_LO,SCORE_GRUNT_LO,SCORE_GRUNT_LO,SCORE_GRUNT_LO,SCORE_GRUNT_LO,SCORE_GRUNT_LO
   .byte SCORE_GRUNT_LO,SCORE_GRUNT_LO,SCORE_GRUNT_LO,SCORE_GRUNT_LO,SCORE_GRUNT_LO,SCORE_GRUNT_LO,SCORE_GRUNT_LO,SCORE_GRUNT_LO,SCORE_GRUNT_LO
   .byte SCORE_GRUNT_LO,SCORE_GRUNT_LO,SCORE_GRUNT_LO,SCORE_GRUNT_LO,SCORE_GRUNT_LO,SCORE_GRUNT_LO,SCORE_GRUNT_LO,SCORE_GRUNT_LO,SCORE_GRUNT_LO
 formation_slot_score_mid_table:
-  .byte SCORE_FLAGSHIP_MID,SCORE_FLAGSHIP_MID
+  .byte SCORE_DREADNOUGHT_MID,SCORE_DREADNOUGHT_MID
   .byte SCORE_FLAGSHIP_MID,SCORE_FLAGSHIP_MID,SCORE_FLAGSHIP_MID,SCORE_FLAGSHIP_MID,SCORE_FLAGSHIP_MID
   .byte SCORE_ESCORT_MID,SCORE_ESCORT_MID,SCORE_ESCORT_MID,SCORE_ESCORT_MID,SCORE_ESCORT_MID,SCORE_ESCORT_MID,SCORE_ESCORT_MID
   .byte SCORE_GRUNT_MID,SCORE_GRUNT_MID,SCORE_GRUNT_MID,SCORE_GRUNT_MID,SCORE_GRUNT_MID,SCORE_GRUNT_MID,SCORE_GRUNT_MID,SCORE_GRUNT_MID,SCORE_GRUNT_MID
   .byte SCORE_GRUNT_MID,SCORE_GRUNT_MID,SCORE_GRUNT_MID,SCORE_GRUNT_MID,SCORE_GRUNT_MID,SCORE_GRUNT_MID,SCORE_GRUNT_MID,SCORE_GRUNT_MID,SCORE_GRUNT_MID
   .byte SCORE_GRUNT_MID,SCORE_GRUNT_MID,SCORE_GRUNT_MID,SCORE_GRUNT_MID,SCORE_GRUNT_MID,SCORE_GRUNT_MID,SCORE_GRUNT_MID,SCORE_GRUNT_MID,SCORE_GRUNT_MID
 formation_slot_score_hi_table:
-  .byte SCORE_FLAGSHIP_HI,SCORE_FLAGSHIP_HI
+  .byte SCORE_DREADNOUGHT_HI,SCORE_DREADNOUGHT_HI
   .byte SCORE_FLAGSHIP_HI,SCORE_FLAGSHIP_HI,SCORE_FLAGSHIP_HI,SCORE_FLAGSHIP_HI,SCORE_FLAGSHIP_HI
   .byte SCORE_ESCORT_HI,SCORE_ESCORT_HI,SCORE_ESCORT_HI,SCORE_ESCORT_HI,SCORE_ESCORT_HI,SCORE_ESCORT_HI,SCORE_ESCORT_HI
   .byte SCORE_GRUNT_HI,SCORE_GRUNT_HI,SCORE_GRUNT_HI,SCORE_GRUNT_HI,SCORE_GRUNT_HI,SCORE_GRUNT_HI,SCORE_GRUNT_HI,SCORE_GRUNT_HI,SCORE_GRUNT_HI
@@ -4743,7 +4766,7 @@ store_char_mode_enemy_effect_slot0:
 store_char_mode_enemy_effect_slot0_msb_done:
   sta SPRITE_X_MSB
   lda SPRITE_MULTICOLOR
-  and #%11110111
+  ora #SPRITE3_MASK
   sta SPRITE_MULTICOLOR
   lda enemy_explosion_pointer
   jsr store_sprite_pointer_3
@@ -4767,7 +4790,7 @@ store_char_mode_enemy_effect_slot1:
 store_char_mode_enemy_effect_slot1_msb_done:
   sta SPRITE_X_MSB
   lda SPRITE_MULTICOLOR
-  and #%11101111
+  ora #SPRITE4_MASK
   sta SPRITE_MULTICOLOR
   lda enemy_explosion_pointer
   jsr store_sprite_pointer_4
@@ -4791,7 +4814,7 @@ store_char_mode_enemy_effect_slot2:
 store_char_mode_enemy_effect_slot2_msb_done:
   sta SPRITE_X_MSB
   lda SPRITE_MULTICOLOR
-  and #%11011111
+  ora #SPRITE5_MASK
   sta SPRITE_MULTICOLOR
   lda enemy_explosion_pointer
   jsr store_sprite_pointer_5
@@ -4815,7 +4838,7 @@ store_char_mode_enemy_effect_slot3:
 store_char_mode_enemy_effect_slot3_msb_done:
   sta SPRITE_X_MSB
   lda SPRITE_MULTICOLOR
-  and #%10111111
+  ora #SPRITE6_MASK
   sta SPRITE_MULTICOLOR
   lda enemy_explosion_pointer
   jsr store_sprite_pointer_6
@@ -4839,7 +4862,7 @@ store_char_mode_enemy_effect_slot4:
 store_char_mode_enemy_effect_slot4_msb_done:
   sta SPRITE_X_MSB
   lda SPRITE_MULTICOLOR
-  and #%01111111
+  ora #SPRITE7_MASK
   sta SPRITE_MULTICOLOR
   lda enemy_explosion_pointer
   jsr store_sprite_pointer_7

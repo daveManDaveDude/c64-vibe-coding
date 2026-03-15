@@ -12,7 +12,8 @@ CHAR_BYTES_PER_ROW = 4
 SHIFT_PHASES = 8
 
 # The formation uses the first two frames for each enemy type.
-FORMATION_FRAME_SPRITE_INDICES = (0, 1, 3, 4, 6, 7)
+# The fourth type is the elite top-row invader from arcade band 3.
+FORMATION_FRAME_SPRITE_INDICES = (0, 1, 3, 4, 6, 7, 36, 37)
 # The second animation frame for each formation type carries the same tiny
 # detached bottom-row pixel pair in the sprite art. It reads as corruption in
 # the shared char renderer, so trim that row in the generated char pack only.
@@ -24,6 +25,13 @@ TRIM_BOTTOM_ROW_SPRITE_INDICES = {1, 4, 7}
 REUSE_BASE_SPRITE_INDICES = {
     1: 0,
     4: 3,
+    37: 36,
+}
+TOP_ROW_OVERRIDES = {
+    # The dreadnought is taller than the other formation sprites. Shift its
+    # cached 8-row window down so the lower tail pixel remains visible.
+    36: 5,
+    37: 5,
 }
 SPRITE_TO_CHAR_PAIR = {
     "00": "00",
@@ -31,6 +39,7 @@ SPRITE_TO_CHAR_PAIR = {
     "10": "11",
     "11": "10",
 }
+DREADNOUGHT_SPRITE_INDICES = {36, 37}
 
 
 def load_sprites(path: Path) -> list[bytes]:
@@ -48,12 +57,14 @@ def first_active_row(sprite: bytes) -> int:
     raise ValueError("sprite contains no visible rows")
 
 
-def sprite_row_to_multicolor_char_bytes(row_bytes: bytes) -> list[int]:
+def sprite_row_to_multicolor_char_bytes(row_bytes: bytes, sprite_index: int) -> list[int]:
     sprite_bits = "".join(f"{value:08b}" for value in row_bytes)
     char_pairs = []
 
     for pair_index in range(0, 24, 2):
         pair = sprite_bits[pair_index : pair_index + 2]
+        if sprite_index in DREADNOUGHT_SPRITE_INDICES and pair == "11":
+            pair = "01"
         char_pairs.append(SPRITE_TO_CHAR_PAIR[pair])
 
     # Keep the historical 32-bit row width used by the formation char bank.
@@ -84,7 +95,7 @@ def build_frame_pages(sprites: list[bytes]) -> bytes:
 
     for sprite_index in FORMATION_FRAME_SPRITE_INDICES:
         sprite = sprites[REUSE_BASE_SPRITE_INDICES.get(sprite_index, sprite_index)]
-        top_row = first_active_row(sprite)
+        top_row = TOP_ROW_OVERRIDES.get(sprite_index, first_active_row(sprite))
         if top_row + CHAR_ROWS > SPRITE_VISIBLE_ROWS:
             raise ValueError(
                 f"sprite {sprite_index} active band starting at row {top_row} exceeds {CHAR_ROWS} rows"
@@ -93,7 +104,12 @@ def build_frame_pages(sprites: list[bytes]) -> bytes:
         base_rows = []
         for row in range(top_row, top_row + CHAR_ROWS):
             start = row * SPRITE_ROW_BYTES
-            base_rows.append(sprite_row_to_multicolor_char_bytes(sprite[start : start + SPRITE_ROW_BYTES]))
+            base_rows.append(
+                sprite_row_to_multicolor_char_bytes(
+                    sprite[start : start + SPRITE_ROW_BYTES],
+                    sprite_index,
+                )
+            )
 
         if sprite_index in TRIM_BOTTOM_ROW_SPRITE_INDICES:
             # The source art keeps a tiny dangling tail pair on animation frame 1.
@@ -110,7 +126,7 @@ def build_frame_pages(sprites: list[bytes]) -> bytes:
 
 def main() -> None:
     repo_root = Path(__file__).resolve().parent.parent
-    sprite_bin = repo_root / "src" / "generated_enemy_sprites.bin"
+    sprite_bin = repo_root / "src" / "generated_arcade_sprites.bin"
     output_bin = repo_root / "src" / "generated_formation_char_bitmap.bin"
 
     sprites = load_sprites(sprite_bin)

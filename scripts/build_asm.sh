@@ -62,7 +62,7 @@ if [ ! -f "$PLAYER_EXPLOSION_ASM" ] || [ ! -f "$PLAYER_EXPLOSION_BIN" ] || [ "$P
   python3 scripts/generate_player_explosion_sprites.py
 fi
 
-if [ ! -f "$FORMATION_CHAR_BIN" ] || [ "$SPRITE_BIN" -nt "$FORMATION_CHAR_BIN" ] || [ "scripts/generate_formation_char_bitmap.py" -nt "$FORMATION_CHAR_BIN" ]; then
+if [ ! -f "$FORMATION_CHAR_BIN" ] || [ "$SPRITE_BIN" -nt "$FORMATION_CHAR_BIN" ] || [ "$FULL_SPRITE_BIN" -nt "$FORMATION_CHAR_BIN" ] || [ "scripts/generate_formation_char_bitmap.py" -nt "$FORMATION_CHAR_BIN" ]; then
   python3 scripts/generate_formation_char_bitmap.py
 fi
 

@@ -113,7 +113,7 @@ def formation_slot_row(symbols: dict, slot_index: int) -> int:
 
 def formation_slot_color(symbols: dict, slot_index: int) -> int:
     if slot_index < formation_top_slot_count(symbols):
-        return symbols["FLAGSHIP_COLOR"]
+        return symbols["DREADNOUGHT_COLOR"]
     if slot_index < formation_mid_slot_end(symbols):
         return symbols["ESCORT_COLOR"]
     return symbols["GRUNT_COLOR"]
@@ -121,7 +121,7 @@ def formation_slot_color(symbols: dict, slot_index: int) -> int:
 
 def formation_slot_frame_base(symbols: dict, slot_index: int) -> int:
     if slot_index < formation_top_slot_count(symbols):
-        return 0
+        return 6
     if slot_index < formation_mid_slot_end(symbols):
         return 2
     return 4
