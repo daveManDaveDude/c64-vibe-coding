@@ -27,6 +27,9 @@ BasicUpstart2(start)
 .label SPRITE_X_EXPAND = $d01d
 .label SPRITE_Y_EXPAND = $d017
 .label JOYSTICK_PORT_2 = $dc00
+.label KEYBOARD_PORT_B = $dc01
+.label CIA1_DATA_DIR_A = $dc02
+.label CIA1_DATA_DIR_B = $dc03
 .label CIA1_IRQ_CONTROL = $dc0d
 .label CIA2_IRQ_CONTROL = $dd0d
 .label CPU_PORT = $01
@@ -147,7 +150,10 @@ BasicUpstart2(start)
 .label FORMATION_CHAR_DYNAMIC_MAX_X = ((FORMATION_CHAR_MAX_X_HI << 8) | FORMATION_CHAR_MAX_X_LO) + FORMATION_RIGHT_BOUNCE_ALLOWANCE
 .label FORMATION_CHAR_DYNAMIC_MAX_X_LO = <FORMATION_CHAR_DYNAMIC_MAX_X
 .label FORMATION_CHAR_DYNAMIC_MAX_X_HI = >FORMATION_CHAR_DYNAMIC_MAX_X
-.label FORMATION_MOVE_PERIOD = 2
+.label FORMATION_MOVE_SPEED_THRESHOLD = 8
+.label FORMATION_MOVE_SPEED_EASY = 4
+.label WAVE_DIFFICULTY_LEVEL_COUNT = 8
+.label ENEMY_MAX_THREATS_EASY = 2
 .label FORMATION_CLEAR_STRATEGY_EDGE_GLOBAL = $00
 .label FORMATION_CLEAR_STRATEGY_ROWWISE = $01
 .label ARCADE_SPRITE_PTR_BASE = $92
@@ -264,6 +270,10 @@ BasicUpstart2(start)
 .label DIVE_ANIMATION_RATE = 1
 .label DIVE_ANIMATION_MAX_FRAME = 9
 .label DIVE_FIRE_HOLD_TICKS = 10
+.label FORMATION_GRUNT_COLUMN_COUNT = 9
+.label FORMATION_GRUNT_TOP_ROW_START_SLOT = FORMATION_MID_SLOT_END
+.label FORMATION_GRUNT_MID_ROW_START_SLOT = FORMATION_GRUNT_TOP_ROW_START_SLOT + FORMATION_GRUNT_COLUMN_COUNT
+.label FORMATION_GRUNT_BOTTOM_ROW_START_SLOT = FORMATION_GRUNT_MID_ROW_START_SLOT + FORMATION_GRUNT_COLUMN_COUNT
 .label ENEMY_BULLET_LIMIT = 2
 .label ENEMY_BULLET_CHAR_BASE_LOW = 64
 .label ENEMY_BULLET_CHAR_BASE_HIGH = 224
@@ -275,6 +285,8 @@ BasicUpstart2(start)
 .label ENEMY_BULLET_FIRE_MIN_Y = 104
 .label ENEMY_BULLET_FIRE_MAX_Y = 156
 .label ENEMY_BULLET_MAX_Y = 248
+.label ENEMY_FIRE_SOURCE_FORMATION = $00
+.label ENEMY_FIRE_SOURCE_DIVE = $01
 .label ENEMY_EXPLOSION_COLOR = $07
 .label ENEMY_EXPLOSION_FRAME_TICKS = 6
 .label ENEMY_EXPLOSION_SPRITE0_PTR = $df
@@ -775,8 +787,7 @@ init_formation_alive_loop:
   lda #$00
   sta formation_frame
   sta formation_anim_index
-  lda #FORMATION_MOVE_PERIOD
-  sta formation_move_timer
+  sta formation_move_accumulator
   lda #$01
   sta formation_render_dirty
   lda #$00
@@ -856,7 +867,7 @@ restore_player_ship:
   ora #%00000010
   sta SPRITE_ENABLE
 
-  lda #ENEMY_BULLET_FIRE_COOLDOWN
+  lda enemy_fire_cooldown_current
   sta enemy_fire_cooldown
   rts
 
@@ -924,7 +935,7 @@ init_dive_attack:
   lda #DIVE_SLOT_NONE
   sta dive_slot
 
-  lda #DIVE_START_DELAY
+  lda dive_start_delay_current
   sta dive_delay
   rts
 
@@ -1099,7 +1110,7 @@ clear_active_dive_state:
   lda #DIVE_SLOT_NONE
   sta dive_slot
 
-  lda #DIVE_START_DELAY
+  lda dive_start_delay_current
   sta dive_delay
   jsr disable_char_mode_dive_sprite
   rts
@@ -1130,6 +1141,33 @@ clear_enemy_hit_animations_loop:
   bcc clear_enemy_hit_animations_loop
   rts
 
+apply_wave_difficulty:
+  lda wave_number
+  beq apply_wave_difficulty_first_wave
+  sec
+  sbc #$01
+  cmp #WAVE_DIFFICULTY_LEVEL_COUNT
+  bcc apply_wave_difficulty_index_ready
+  lda #(WAVE_DIFFICULTY_LEVEL_COUNT - 1)
+  bne apply_wave_difficulty_index_ready
+apply_wave_difficulty_first_wave:
+  lda #$00
+apply_wave_difficulty_index_ready:
+  tax
+  lda wave_formation_move_speed_table, x
+  sta formation_move_speed_current
+  lda wave_dive_start_delay_table, x
+  sta dive_start_delay_current
+  lda wave_dive_retry_delay_table, x
+  sta dive_retry_delay_current
+  lda wave_enemy_bullet_speed_table, x
+  sta enemy_bullet_speed_current
+  lda wave_enemy_fire_cooldown_table, x
+  sta enemy_fire_cooldown_current
+  lda wave_enemy_max_threats_table, x
+  sta enemy_max_threats_current
+  rts
+
 reset_wave_runtime:
   jsr deactivate_shot
   jsr clear_enemy_bullets
@@ -1142,6 +1180,8 @@ reset_wave_runtime:
   rts
 
 start_new_wave:
+  inc wave_number
+  jsr apply_wave_difficulty
   jsr reset_wave_runtime
   jsr init_formation
   jsr restore_player_ship
@@ -1154,6 +1194,8 @@ start_new_game:
   lda #INITIAL_PLAYER_LIVES
   sta player_lives
   jsr update_lives_display
+  lda #$00
+  sta wave_number
   jsr start_new_wave
   rts
 
@@ -1365,12 +1407,18 @@ update_formation:
 update_formation_active:
   inc formation_frame
   jsr update_formation_animation_state
-  dec formation_move_timer
-  beq formation_move_timer_elapsed
+  lda formation_move_accumulator
+  clc
+  adc formation_move_speed_current
+  sta formation_move_accumulator
+  cmp #FORMATION_MOVE_SPEED_THRESHOLD
+  bcs formation_move_ready
   jmp formation_done
-formation_move_timer_elapsed:
-  lda #FORMATION_MOVE_PERIOD
-  sta formation_move_timer
+formation_move_ready:
+  sec
+  sbc #FORMATION_MOVE_SPEED_THRESHOLD
+  sta formation_move_accumulator
+  jmp formation_move_tick
 
 formation_move_tick:
   jsr update_formation_bounds
@@ -1429,8 +1477,7 @@ formation_clamp_char_max:
   sta formation_x_hi
   lda #$ff
   sta formation_dir
-  lda #$01
-  sta formation_move_timer
+  jsr prime_formation_move_next_frame
 
 formation_store_x:
   jsr update_formation_slot_positions
@@ -1445,8 +1492,7 @@ formation_store_x:
   bne formation_store_x_check_render
   cpy #$01
   bne formation_store_x_check_render
-  lda #$01
-  sta formation_move_timer
+  jsr prime_formation_move_next_frame
 formation_store_x_check_render:
   lda formation_anchor_col
   cmp formation_render_anchor_col
@@ -1482,6 +1528,13 @@ update_formation_animation_state:
   lda #$01
   sta formation_render_dirty
 update_formation_animation_state_done:
+  rts
+
+prime_formation_move_next_frame:
+  lda #FORMATION_MOVE_SPEED_THRESHOLD
+  sec
+  sbc formation_move_speed_current
+  sta formation_move_accumulator
   rts
 
 update_formation_bounds:
@@ -1665,6 +1718,14 @@ finish_dive_return:
   rts
 
 launch_dive_if_possible:
+  jsr count_active_threats
+  cmp enemy_max_threats_current
+  bcc launch_dive_if_possible_pick_order
+  lda dive_retry_delay_current
+  sta dive_delay
+  clc
+  rts
+launch_dive_if_possible_pick_order:
   lda dive_column_toggle
   beq launch_dive_left_column_first
 
@@ -1690,7 +1751,7 @@ launch_dive_if_possible_loop:
   iny
   cpy #FORMATION_DIVE_CANDIDATE_COUNT
   bcc launch_dive_if_possible_loop
-  lda #DIVE_RETRY_DELAY
+  lda dive_retry_delay_current
   sta dive_delay
   clc
   rts
@@ -1736,7 +1797,7 @@ begin_dive:
   sta dive_fire_hold_timer
   lda #DIVE_PHASE0_TICKS
   sta dive_timer
-  lda #DIVE_START_DELAY
+  lda dive_start_delay_current
   sta dive_delay
   jsr store_dive_position
   sec
@@ -1946,7 +2007,7 @@ update_enemy_fire_loop:
 
   lda enemy_bullet_y, x
   clc
-  adc #ENEMY_BULLET_SPEED
+  adc enemy_bullet_speed_current
   sta enemy_bullet_y, x
   cmp #ENEMY_BULLET_MAX_Y
   bcs deactivate_enemy_bullet
@@ -1977,41 +2038,54 @@ try_spawn_enemy_bullet:
   rts
 
 enemy_fire_ready:
-  lda dive_active
-  beq try_spawn_enemy_bullet_done
-  lda dive_phase
-  cmp #$01
-  bcc try_spawn_enemy_bullet_done
-  lda dive_y
-  cmp #ENEMY_BULLET_FIRE_MIN_Y
-  bcc try_spawn_enemy_bullet_done
-  cmp #ENEMY_BULLET_FIRE_MAX_Y
+  jsr count_active_threats
+  cmp enemy_max_threats_current
   bcs try_spawn_enemy_bullet_done
+
+  jsr find_enemy_bullet_source
+  bcc try_spawn_enemy_bullet_done
 
   jsr find_free_enemy_bullet_slot
   bcc try_spawn_enemy_bullet_done
 
-  lda dive_x_lo
-  clc
-  adc #ENEMY_BULLET_START_X_OFFSET
+  lda enemy_fire_source_x_lo
   sta enemy_bullet_x_lo, x
-  lda dive_x_hi
-  adc #$00
+  lda enemy_fire_source_x_hi
   sta enemy_bullet_x_hi, x
 
-  lda dive_y
-  clc
-  adc #ENEMY_BULLET_START_Y_OFFSET
+  lda enemy_fire_source_y
   sta enemy_bullet_y, x
 
   lda #$01
   sta enemy_bullet_active, x
-  lda #ENEMY_BULLET_FIRE_COOLDOWN
+  lda enemy_fire_cooldown_current
   sta enemy_fire_cooldown
+  lda enemy_fire_source_type
+  cmp #ENEMY_FIRE_SOURCE_DIVE
+  bne try_spawn_enemy_bullet_done
   lda #DIVE_FIRE_HOLD_TICKS
   sta dive_fire_hold_timer
 
 try_spawn_enemy_bullet_done:
+  rts
+
+count_active_threats:
+  lda #$00
+  sta enemy_threat_count
+  lda dive_active
+  beq count_active_threats_bullets
+  inc enemy_threat_count
+count_active_threats_bullets:
+  ldx #$00
+count_active_threats_loop:
+  lda enemy_bullet_active, x
+  beq count_active_threats_next
+  inc enemy_threat_count
+count_active_threats_next:
+  inx
+  cpx #ENEMY_BULLET_LIMIT
+  bcc count_active_threats_loop
+  lda enemy_threat_count
   rts
 
 find_free_enemy_bullet_slot:
@@ -2067,7 +2141,7 @@ clear_enemy_bullets_loop:
   cpx #ENEMY_BULLET_LIMIT
   bcc clear_enemy_bullets_loop
 
-  lda #ENEMY_BULLET_FIRE_COOLDOWN
+  lda enemy_fire_cooldown_current
   sta enemy_fire_cooldown
   rts
 
@@ -2452,16 +2526,93 @@ joystick_right_pressed:
 joystick_fire_check:
   lda joystick_state
   and #FIRE_MASK
-  beq joystick_fire_pressed
+  bne joystick_fire_not_pressed
+  jmp joystick_fire_pressed
+joystick_fire_not_pressed:
   lda #$00
   sta effective_fire
-  rts
+  jmp merge_keyboard_input
+
+* = $4700 "Main Program Tail"
+
 joystick_fire_pressed:
   lda #$01
   sta effective_fire
+  jmp merge_keyboard_input
+
+merge_keyboard_input:
+  jsr scan_keyboard_controls
+
+  lda keyboard_left_pressed
+  beq merge_keyboard_input_right
+  lda #$01
+  sta effective_left
+merge_keyboard_input_right:
+  lda keyboard_right_pressed
+  beq merge_keyboard_input_fire
+  lda #$01
+  sta effective_right
+merge_keyboard_input_fire:
+  lda keyboard_fire_pressed
+  beq merge_keyboard_input_done
+  lda #$01
+  sta effective_fire
+merge_keyboard_input_done:
   rts
 
-* = $4700 "Main Program Tail"
+scan_keyboard_controls:
+  lda #$00
+  sta keyboard_left_pressed
+  sta keyboard_right_pressed
+  sta keyboard_fire_pressed
+
+  lda JOYSTICK_PORT_2
+  sta cia1_port_a_backup
+  lda CIA1_DATA_DIR_A
+  sta cia1_ddra_backup
+  lda CIA1_DATA_DIR_B
+  sta cia1_ddrb_backup
+
+  lda #$ff
+  sta CIA1_DATA_DIR_A
+  lda #$00
+  sta CIA1_DATA_DIR_B
+
+  lda #%11111101
+  sta JOYSTICK_PORT_2
+  lda KEYBOARD_PORT_B
+  and #%00010000
+  bne scan_keyboard_controls_x
+  lda #$01
+  sta keyboard_left_pressed
+
+scan_keyboard_controls_x:
+  lda #%11111011
+  sta JOYSTICK_PORT_2
+  lda KEYBOARD_PORT_B
+  and #%10000000
+  bne scan_keyboard_controls_space
+  lda #$01
+  sta keyboard_right_pressed
+
+scan_keyboard_controls_space:
+  lda #%01111111
+  sta JOYSTICK_PORT_2
+  lda KEYBOARD_PORT_B
+  and #%00010000
+  bne scan_keyboard_controls_restore
+  lda #$01
+  sta keyboard_fire_pressed
+
+scan_keyboard_controls_restore:
+  lda cia1_ddrb_backup
+  sta CIA1_DATA_DIR_B
+  lda cia1_ddra_backup
+  sta CIA1_DATA_DIR_A
+  lda #$ff
+  sta JOYSTICK_PORT_2
+  rts
+
 // Keep the hidden screen page at $2000-$23ff free for page flipping.
 update_shot:
   lda game_state
@@ -3749,8 +3900,8 @@ formation_dir:
   .byte $01
 formation_frame:
   .byte $00
-formation_move_timer:
-  .byte FORMATION_MOVE_PERIOD
+formation_move_accumulator:
+  .byte $00
 formation_bound_min_lo:
   .byte FORMATION_CHAR_MIN_X_LO
 formation_bound_min_hi:
@@ -3962,6 +4113,60 @@ frame_capture_latch_arm:
   .byte $00
 frame_capture_latch_ready:
   .byte $00
+wave_number:
+  .byte $00
+formation_move_speed_current:
+  .byte FORMATION_MOVE_SPEED_EASY
+dive_start_delay_current:
+  .byte DIVE_START_DELAY
+dive_retry_delay_current:
+  .byte DIVE_RETRY_DELAY
+enemy_bullet_speed_current:
+  .byte ENEMY_BULLET_SPEED
+enemy_fire_cooldown_current:
+  .byte ENEMY_BULLET_FIRE_COOLDOWN
+enemy_max_threats_current:
+  .byte ENEMY_MAX_THREATS_EASY
+enemy_threat_count:
+  .byte $00
+enemy_fire_source_x_lo:
+  .byte $00
+enemy_fire_source_x_hi:
+  .byte $00
+enemy_fire_source_y:
+  .byte $00
+enemy_fire_source_type:
+  .byte ENEMY_FIRE_SOURCE_FORMATION
+enemy_fire_source_slot:
+  .byte DIVE_SLOT_NONE
+enemy_fire_candidate_slot:
+  .byte DIVE_SLOT_NONE
+enemy_fire_column_index:
+  .byte $00
+enemy_fire_candidate_x_lo:
+  .byte $00
+enemy_fire_candidate_x_hi:
+  .byte $00
+enemy_fire_candidate_delta_lo:
+  .byte $00
+enemy_fire_candidate_delta_hi:
+  .byte $00
+enemy_fire_best_delta_lo:
+  .byte $ff
+enemy_fire_best_delta_hi:
+  .byte $ff
+keyboard_left_pressed:
+  .byte $00
+keyboard_right_pressed:
+  .byte $00
+keyboard_fire_pressed:
+  .byte $00
+cia1_port_a_backup:
+  .byte $ff
+cia1_ddra_backup:
+  .byte $00
+cia1_ddrb_backup:
+  .byte $00
 game_state:
   .byte GAME_STATE_READY
 game_state_timer:
@@ -4135,6 +4340,20 @@ game_over_message:
   .byte 7,1,13,5,32,15,22,5,18,0
 press_fire_message:
   .byte 16,18,5,19,19,32,6,9,18,5,0
+
+// Later waves clamp to the last entry so tuning stays gentle and predictable.
+wave_formation_move_speed_table:
+  .byte 4,4,5,5,6,6,7,7
+wave_dive_start_delay_table:
+  .byte 80,76,72,68,64,60,56,52
+wave_dive_retry_delay_table:
+  .byte 32,30,28,26,24,22,20,18
+wave_enemy_bullet_speed_table:
+  .byte 2,2,2,3,3,3,3,3
+wave_enemy_fire_cooldown_table:
+  .byte 42,38,34,30,26,22,18,14
+wave_enemy_max_threats_table:
+  .byte 2,2,2,2,3,3,3,3
 
 dreadnought_animation_sequence:
   .byte DREADNOUGHT_SPRITE0_PTR,DREADNOUGHT_SPRITE0_PTR,DREADNOUGHT_SPRITE0_PTR,DREADNOUGHT_SPRITE0_PTR
@@ -5087,4 +5306,171 @@ store_slot_explosion_position_formation:
   sta explosion_slot_x_hi, x
   jsr load_slot_visual_y
   sta explosion_slot_y, x
+  rts
+
+* = $4b40 "Enemy Fire Helpers"
+
+find_enemy_bullet_source:
+  jsr find_dive_bullet_source
+  bcs find_enemy_bullet_source_done
+  jsr find_grunt_bullet_source
+find_enemy_bullet_source_done:
+  rts
+
+find_dive_bullet_source:
+  lda dive_active
+  beq find_dive_bullet_source_none
+  lda dive_phase
+  cmp #$01
+  bcc find_dive_bullet_source_none
+  lda dive_y
+  cmp #ENEMY_BULLET_FIRE_MIN_Y
+  bcc find_dive_bullet_source_none
+  cmp #ENEMY_BULLET_FIRE_MAX_Y
+  bcs find_dive_bullet_source_none
+
+  lda dive_x_lo
+  clc
+  adc #ENEMY_BULLET_START_X_OFFSET
+  sta enemy_fire_source_x_lo
+  lda dive_x_hi
+  adc #$00
+  sta enemy_fire_source_x_hi
+  lda dive_y
+  clc
+  adc #ENEMY_BULLET_START_Y_OFFSET
+  sta enemy_fire_source_y
+  lda #ENEMY_FIRE_SOURCE_DIVE
+  sta enemy_fire_source_type
+  sec
+  rts
+
+find_dive_bullet_source_none:
+  clc
+  rts
+
+find_grunt_bullet_source:
+  jsr find_closest_live_grunt_fire_slot
+  bcc find_grunt_bullet_source_none
+
+  tax
+  jsr load_formation_slot_position
+  clc
+  adc #ENEMY_BULLET_START_X_OFFSET
+  sta enemy_fire_source_x_lo
+  tya
+  adc #$00
+  sta enemy_fire_source_x_hi
+  jsr load_slot_visual_y
+  clc
+  adc #ENEMY_BULLET_START_Y_OFFSET
+  sta enemy_fire_source_y
+  lda #ENEMY_FIRE_SOURCE_FORMATION
+  sta enemy_fire_source_type
+  sec
+  rts
+
+find_grunt_bullet_source_none:
+  clc
+  rts
+
+find_closest_live_grunt_fire_slot:
+  lda #DIVE_SLOT_NONE
+  sta enemy_fire_source_slot
+  lda #$ff
+  sta enemy_fire_best_delta_lo
+  sta enemy_fire_best_delta_hi
+  ldx #$00
+find_closest_live_grunt_fire_slot_loop:
+  stx enemy_fire_column_index
+  jsr load_lowest_live_grunt_fire_slot_for_column
+  bcc find_closest_live_grunt_fire_slot_next
+
+  sta enemy_fire_candidate_slot
+  tax
+  jsr load_formation_slot_position
+  sta enemy_fire_candidate_x_lo
+  sty enemy_fire_candidate_x_hi
+
+  sec
+  lda enemy_fire_candidate_x_lo
+  sbc player_x_lo
+  sta enemy_fire_candidate_delta_lo
+  lda enemy_fire_candidate_x_hi
+  sbc player_x_hi
+  sta enemy_fire_candidate_delta_hi
+  bcs find_closest_live_grunt_fire_slot_compare
+
+  lda enemy_fire_candidate_delta_lo
+  eor #$ff
+  clc
+  adc #$01
+  sta enemy_fire_candidate_delta_lo
+  lda enemy_fire_candidate_delta_hi
+  eor #$ff
+  adc #$00
+  sta enemy_fire_candidate_delta_hi
+
+find_closest_live_grunt_fire_slot_compare:
+  lda enemy_fire_candidate_delta_hi
+  cmp enemy_fire_best_delta_hi
+  bcc find_closest_live_grunt_fire_slot_store
+  bne find_closest_live_grunt_fire_slot_next
+  lda enemy_fire_candidate_delta_lo
+  cmp enemy_fire_best_delta_lo
+  bcs find_closest_live_grunt_fire_slot_next
+
+find_closest_live_grunt_fire_slot_store:
+  lda enemy_fire_candidate_slot
+  sta enemy_fire_source_slot
+  lda enemy_fire_candidate_delta_lo
+  sta enemy_fire_best_delta_lo
+  lda enemy_fire_candidate_delta_hi
+  sta enemy_fire_best_delta_hi
+
+find_closest_live_grunt_fire_slot_next:
+  ldx enemy_fire_column_index
+  inx
+  cpx #FORMATION_GRUNT_COLUMN_COUNT
+  bcc find_closest_live_grunt_fire_slot_loop
+
+  lda enemy_fire_source_slot
+  cmp #DIVE_SLOT_NONE
+  beq find_closest_live_grunt_fire_slot_none
+  sec
+  rts
+
+find_closest_live_grunt_fire_slot_none:
+  clc
+  rts
+
+load_lowest_live_grunt_fire_slot_for_column:
+  lda formation_slot0_alive + FORMATION_GRUNT_BOTTOM_ROW_START_SLOT, x
+  bne load_lowest_live_grunt_fire_slot_bottom
+  lda formation_slot0_alive + FORMATION_GRUNT_MID_ROW_START_SLOT, x
+  bne load_lowest_live_grunt_fire_slot_mid
+  lda formation_slot0_alive + FORMATION_GRUNT_TOP_ROW_START_SLOT, x
+  bne load_lowest_live_grunt_fire_slot_top
+  clc
+  rts
+
+load_lowest_live_grunt_fire_slot_bottom:
+  txa
+  clc
+  adc #FORMATION_GRUNT_BOTTOM_ROW_START_SLOT
+  sec
+  rts
+
+load_lowest_live_grunt_fire_slot_mid:
+  txa
+  clc
+  adc #FORMATION_GRUNT_MID_ROW_START_SLOT
+  sec
+  rts
+
+load_lowest_live_grunt_fire_slot_top:
+  txa
+  clc
+  adc #FORMATION_GRUNT_TOP_ROW_START_SLOT
+  sec
   rts
